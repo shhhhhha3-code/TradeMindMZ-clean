@@ -45,30 +45,38 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # 6. Sett opp Android SDK
+      # 6. Bygg React/Vite webappen
+      - name: Build web app
+        run: pnpm exec vite build
+
+      # 7. Kopier web assets inn i Capacitor Android
+      - name: Copy web assets to Android
+        run: pnpm exec cap copy android
+
+      # 8. Sett opp Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           # Kun cmdline-tools; SDK-komponentene installeres eksplisitt under.
           cmdline-tools-version: '11076708'
 
-      # 7. Installer nødvendige SDK-komponenter
+      # 9. Installer nødvendige SDK-komponenter
       - name: Install Android SDK components
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "platform-tools"
 
-      # 8. Gjør gradlew kjørbar
+      # 10. Gjør gradlew kjørbar
       - name: Grant execute permission for gradlew
         working-directory: ./android
         run: chmod +x gradlew
 
-      # 9. Bygg debug APK
+      # 11. Bygg debug APK
       - name: Build debug APK
         working-directory: ./android
         run: ./gradlew assembleDebug --stacktrace
 
-      # 10. Last opp app-debug.apk som artifact
+      # 12. Last opp app-debug.apk som artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
