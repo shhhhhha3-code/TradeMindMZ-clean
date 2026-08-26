@@ -75,9 +75,9 @@ async function getPionexUsdtMFuturesBalance(
     const coin = String(obj.coin ?? obj.coinType ?? obj.asset ?? obj.currency ?? '').toUpperCase();
     const hasBalanceField = [
       'free', 'available', 'availableBalance', 'available_balance',
-      'usdtAvailable', 'marginAvailable', 'availableMargin',
+      'usdtAvailable', 'availableUsdt', 'availableUSDT', 'marginAvailable', 'availableMargin',
       'frozen', 'freeze', 'locked', 'marginFrozen', 'frozenBalance',
-      'total', 'balance', 'walletBalance', 'equity', 'amount',
+      'total', 'balance', 'walletBalance', 'equity', 'amount', 'marginBalance', 'accountBalance',
     ].some((key) => obj[key] !== undefined);
 
     if (coin && hasBalanceField) balanceRows.push(obj);
@@ -93,11 +93,14 @@ async function getPionexUsdtMFuturesBalance(
   });
 
   const readNumber = (...values: unknown[]): number => {
-    for (const value of values) {
-      const n = Number(value);
-      if (Number.isFinite(n)) return n;
-    }
-    return 0;
+    const numbers = values
+      .map((value) => Number(value))
+      .filter((n) => Number.isFinite(n));
+    // Pionex may expose the same balance under several keys. A zero-valued
+    // legacy key must not hide a populated key such as availableBalance or
+    // walletBalance, so prefer the first positive value and only fall back to
+    // zero when every candidate is zero/missing.
+    return numbers.find((n) => n > 0) ?? numbers[0] ?? 0;
   };
 
   // Prefer explicit available/free. For a Futures row with no explicit free,
@@ -111,7 +114,13 @@ async function getPionexUsdtMFuturesBalance(
       row.frozen, row.freeze, row.locked, row.marginFrozen, row.frozenBalance,
     );
     const rowTotal = readNumber(
-      row.total, row.balance, row.walletBalance, row.equity, row.amount,
+      row.total,
+      row.balance,
+      row.walletBalance,
+      row.equity,
+      row.amount,
+      row.marginBalance,
+      row.accountBalance,
     );
     const explicitAvailable = readNumber(
       row.free,
@@ -121,6 +130,8 @@ async function getPionexUsdtMFuturesBalance(
       row.usdtAvailable,
       row.marginAvailable,
       row.availableMargin,
+      row.availableUsdt,
+      row.availableUSDT,
     );
     const derivedAvailable = explicitAvailable !== 0
       ? explicitAvailable
@@ -994,12 +1005,18 @@ Deno.serve(async (req) => {
             ''
           );
 
-          const free = Number(
-            b.free ??
-            b.available ??
-            b.usdtAvailable ??
-            0
-          );
+          const freeCandidates = [
+            b.free,
+            b.available,
+            b.availableBalance,
+            b.available_balance,
+            b.usdtAvailable,
+            b.availableUsdt,
+            b.availableUSDT,
+            b.marginAvailable,
+            b.availableMargin,
+          ].map(Number).filter((n) => Number.isFinite(n));
+          const free = freeCandidates.find((n) => n > 0) ?? freeCandidates[0] ?? 0;
 
           const freeze = Number(
             b.frozen ??
@@ -1009,14 +1026,18 @@ Deno.serve(async (req) => {
             0
           );
 
-          const explicitTotal = Number(
-            b.total ??
-            b.balance ??
-            b.amount ??
-            0
-          );
+          const totalCandidates = [
+            b.total,
+            b.balance,
+            b.walletBalance,
+            b.equity,
+            b.amount,
+            b.marginBalance,
+            b.accountBalance,
+          ].map(Number).filter((n) => Number.isFinite(n));
+          const explicitTotal = totalCandidates.find((n) => n > 0) ?? totalCandidates[0] ?? 0;
 
-          const total = Number.isFinite(explicitTotal) && explicitTotal > 0
+          const total = explicitTotal > 0
             ? explicitTotal
             : free + freeze;
 

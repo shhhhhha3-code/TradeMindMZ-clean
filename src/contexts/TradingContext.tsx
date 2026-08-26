@@ -2568,41 +2568,51 @@ export function TradingProvider({ children }: { children: ReactNode }) {
     }
 
     const quantity = investment / trade.buy_price;
-    const newBalance = currentBalance - investment;
 
     try {
-      // Reserve the demo balance first. This prevents the UI/database
-      // from showing a successful trade while the balance update fails.
-      await updateDemoBalance(user.id, newBalance);
+      // IMPORTANT: openDemoTrade() calls the server-side atomic RPC
+      // open_demo_trade_atomic(), which locks demo_accounts, checks the
+      // authoritative balance, debits it, and inserts the trade in ONE
+      // transaction. Do not update demo_accounts here as that would debit
+      // the same investment twice and can make the RPC fail with
+      // "Insufficient demo balance".
+      const createdTrade = await openDemoTrade({
+        ...trade,
+        user_id: user.id,
+        investment,
+        quantity,
+      });
 
-      let createdTrade: DemoTrade;
+      // The RPC is authoritative. Refresh the account after success so the
+      // UI reflects the exact database balance even if another tab opened a
+      // demo trade at nearly the same time. If that read fails, the local
+      // fallback is still safe because the atomic RPC already succeeded.
+      let authoritativeBalance = currentBalance - investment;
       try {
-        createdTrade = await openDemoTrade({
-          ...trade,
-          user_id: user.id,
-          investment,
-          quantity,
-        });
-      } catch (e) {
-        // Roll back the balance if creating the demo trade fails.
-        try {
-          await updateDemoBalance(user.id, currentBalance);
-        } catch (rollbackError) {
-          console.error('[DEMO_BALANCE_ROLLBACK_FAILED]', rollbackError);
+        const freshAccount = await getDemoAccount(user.id);
+        if (freshAccount) {
+          const freshBalance = Number(freshAccount.balance);
+          if (Number.isFinite(freshBalance)) authoritativeBalance = freshBalance;
         }
-        throw e;
+      } catch (refreshError) {
+        console.warn('[DEMO_ACCOUNT_REFRESH_AFTER_BUY_FAILED]', refreshError);
       }
 
       setDemoAccount(prev =>
-        prev ? { ...prev, balance: newBalance } : prev
+        prev ? { ...prev, balance: authoritativeBalance } : prev
       );
 
-      // The INSERT already returned the authoritative row. Update the UI
-      // directly instead of performing a second read that could fail under a
-      // transient RLS/network condition after a successful INSERT.
       const updated = [createdTrade, ...openTradesRef.current.filter(t => t.id !== createdTrade.id)];
       openTradesRef.current = updated;
       setOpenTrades(updated);
+
+      console.log('[DEMO_BUY_SUCCESS]', {
+        trade_id: createdTrade.id,
+        pair: createdTrade.pair,
+        investment,
+        quantity,
+        balance_after: authoritativeBalance,
+      });
 
       return createdTrade;
     } catch (e) {

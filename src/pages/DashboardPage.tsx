@@ -23,7 +23,7 @@ import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import type { AISignal, PionexConnection, PionexPosition } from '@/types/types';
 import type { DemoTradeHistory, DemoTrade } from '@/types/types';
-import { getPionexConnection } from '@/db/api';
+import { getPionexConnection, type LiveOrder } from '@/db/api';
 import { supabase } from '@/db/supabase';
 import ManualBuyModal from '@/components/modals/ManualBuyModal';
 import TradingDiagnosticsPanel from '@/components/TradingDiagnosticsPanel';
@@ -200,6 +200,51 @@ function buildPLSeries(
 
 function formatDate(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function getPeriodCutoff(filter: TimeFilter): number {
+  const now = Date.now();
+  if (filter === '7D') return now - 7 * 24 * 60 * 60 * 1000;
+  if (filter === '30D') return now - 30 * 24 * 60 * 60 * 1000;
+  if (filter === '90D') return now - 90 * 24 * 60 * 60 * 1000;
+  return 0;
+}
+
+interface PeriodStats {
+  demoPnl: number;
+  demoTrades: number;
+  demoWins: number;
+  demoWinRate: number;
+  livePnl: number;
+  liveTrades: number;
+  liveWins: number;
+  liveWinRate: number;
+}
+
+function buildPeriodStats(
+  tradeHistory: DemoTradeHistory[],
+  liveOrders: LiveOrder[],
+  filter: TimeFilter
+): PeriodStats {
+  const cutoff = getPeriodCutoff(filter);
+  const demo = tradeHistory.filter(t => t.closed_at && new Date(t.closed_at).getTime() >= cutoff);
+  const live = liveOrders.filter(t => t.closed_at && new Date(t.closed_at).getTime() >= cutoff);
+
+  const demoWins = demo.filter(t => t.profit_loss > 0).length;
+  const liveWins = live.filter(t => (t.realized_pnl ?? 0) > 0).length;
+  const demoPnl = demo.reduce((sum, t) => sum + (t.profit_loss ?? 0), 0);
+  const livePnl = live.reduce((sum, t) => sum + (t.realized_pnl ?? 0), 0);
+
+  return {
+    demoPnl,
+    demoTrades: demo.length,
+    demoWins,
+    demoWinRate: demo.length ? (demoWins / demo.length) * 100 : 0,
+    livePnl,
+    liveTrades: live.length,
+    liveWins,
+    liveWinRate: live.length ? (liveWins / live.length) * 100 : 0,
+  };
 }
 
 function MiniBarChart({ data, positiveColor, negativeColor }: { data: { label: string; value: number }[]; positiveColor: string; negativeColor: string }) {
@@ -450,7 +495,7 @@ function formatPrice(v: number | null | undefined): string {
   return `$${v.toLocaleString('en-US', { minimumFractionDigits: Math.min(2, d), maximumFractionDigits: d })}`;
 }
 
-function DashboardLivePositionsPanel({ pionexConnected }: { pionexConnected: boolean }) {
+function DashboardLivePositionsPanel({ pionexConnected, compact = false }: { pionexConnected: boolean; compact?: boolean }) {
   const [positions, setPositions] = useState<PionexPosition[]>([]);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -540,7 +585,7 @@ function DashboardLivePositionsPanel({ pionexConnected }: { pionexConnected: boo
       )}
 
       {!loading && positions.length > 0 && (
-        <div className="grid grid-cols-1 gap-3">
+        <div className={cn('grid grid-cols-1 gap-3', compact && 'max-h-[360px] overflow-y-auto pr-1')}>
           {positions.map((pos, i) => (
             <DashboardPositionCard key={`${pos.symbol}-${pos.side}-${i}`} pos={pos} />
           ))}
@@ -636,6 +681,90 @@ function DashboardPositionCard({ pos }: { pos: PionexPosition }) {
   );
 }
 
+
+function DashboardDemoOpenTradesPanel({ openTrades }: { openTrades: DemoTrade[] }) {
+  const totalUnrealized = openTrades.reduce((sum, t) => sum + (t.unrealized_pnl ?? 0), 0);
+
+  return (
+    <Panel className="flex flex-col">
+      <PanelHeader
+        title="Demo Open Trades"
+        icon={Layers}
+        action={
+          <div className="flex items-center gap-2">
+            <DemoBadge />
+            <span className={cn(
+              'text-xs font-semibold',
+              openTrades.length > 0 ? 'text-primary' : 'text-muted-foreground'
+            )}>
+              {openTrades.length} open
+            </span>
+          </div>
+        }
+      />
+
+      {openTrades.length === 0 ? (
+        <div className="min-h-[180px] flex flex-col items-center justify-center text-center text-muted-foreground">
+          <Layers className="w-8 h-8 opacity-30 mb-2" />
+          <p className="text-sm font-medium">No open demo trades</p>
+          <p className="text-xs mt-1 max-w-[280px]">
+            Demo positions will appear here immediately after a successful simulated BUY.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {openTrades.map((trade) => {
+            const pnl = trade.unrealized_pnl ?? 0;
+            const pnlPct = trade.pnl_pct ?? (trade.investment > 0 ? (pnl / trade.investment) * 100 : 0);
+            const price = trade.current_price ?? trade.buy_price;
+            return (
+              <div key={trade.id} className="rounded-lg border border-border/70 p-3 bg-muted/30">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <CoinLogo symbol={trade.symbol} size={32} />
+                    <div className="min-w-0">
+                      <div className="font-bold text-sm text-foreground truncate">{trade.pair}</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        Entry {formatPrice(trade.buy_price)} · Now {formatPrice(price)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={cn('text-right shrink-0', pnl >= 0 ? 'text-positive' : 'text-negative')}>
+                    <div className="font-bold text-sm">{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT</div>
+                    <div className="text-[10px]">{pnl >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 mt-3 text-[10px]">
+                  <div>
+                    <div className="text-muted-foreground">Investment</div>
+                    <div className="font-semibold text-foreground">{trade.investment.toFixed(2)} USDT</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Stop Loss</div>
+                    <div className="font-semibold text-negative">{trade.stop_loss ? formatPrice(trade.stop_loss) : '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Take Profit</div>
+                    <div className="font-semibold text-positive">{trade.take_profit ? formatPrice(trade.take_profit) : '—'}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          <div className="flex items-center justify-between pt-2 border-t border-border text-xs">
+            <span className="text-muted-foreground">Open demo unrealized P/L</span>
+            <span className={cn('font-bold', totalUnrealized >= 0 ? 'text-positive' : 'text-negative')}>
+              {totalUnrealized >= 0 ? '+' : ''}{totalUnrealized.toFixed(2)} USDT
+            </span>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const {
@@ -646,7 +775,7 @@ export default function DashboardPage() {
     autoTraderEnabled, autoTraderTradeId, autoTraderTotalTrades, autoTraderLastAction,
     autoTraderBestSetup, autoTraderBestOverallScore,
     signalPerfSummary, signalPerfByConfidence,
-    isPionexLive
+    isPionexLive, liveOrders, openLiveOrders
   } = useTrading();
   const [pionexConnection, setPionexConnection] = useState<PionexConnection | null>(null);
   const [plFilter, setPlFilter] = useState<TimeFilter>('30D');
@@ -690,6 +819,7 @@ export default function DashboardPage() {
   const aiRateLimited     = signalsCache?.gemini_status === 'RATE_LIMIT';
 
   const plData = useMemo(() => buildPLSeries(tradeHistory, openTrades, demoAccount?.total_deposited ?? 500, plFilter), [tradeHistory, openTrades, demoAccount?.total_deposited, plFilter]);
+  const periodStats = useMemo(() => buildPeriodStats(tradeHistory, liveOrders, plFilter), [tradeHistory, liveOrders, plFilter]);
 
   const recentEvents = useMemo(() => buildRecentEvents(
     lastAIUpdate, signals, autoTraderBestSetup, autoTraderBestOverallScore,
@@ -991,6 +1121,29 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {/* Open trades overview — demo and real Pionex positions side-by-side */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <DashboardDemoOpenTradesPanel openTrades={openTrades} />
+        <Panel className="flex flex-col">
+          <PanelHeader
+            title="Pionex Open Trades"
+            icon={Radio}
+            action={
+              <div className="flex items-center gap-2">
+                <span className={cn(
+                  'w-1.5 h-1.5 rounded-full',
+                  pionexConnected ? 'bg-success shadow-[0_0_7px_hsl(var(--success))]' : 'bg-muted-foreground'
+                )} />
+                <span className={cn('text-xs font-semibold', pionexConnected ? 'text-success' : 'text-muted-foreground')}>
+                  {pionexConnected ? `${openLiveOrders.length} tracked` : 'Not connected'}
+                </span>
+              </div>
+            }
+          />
+          <DashboardLivePositionsPanel pionexConnected={pionexConnected} compact />
+        </Panel>
+      </div>
+
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard title="Demo Balance" icon={Wallet}
@@ -1036,22 +1189,30 @@ export default function DashboardPage() {
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Account Value</div>
-            <div className="text-lg font-bold font-['Space_Grotesk'] text-foreground">{performance.account_value.toFixed(2)} USDT</div>
+            <div className="text-xs text-muted-foreground mb-1">Demo P/L · {plFilter}</div>
+            <div className={cn('text-lg font-bold font-["Space_Grotesk"]', periodStats.demoPnl >= 0 ? 'text-positive' : 'text-negative')}>
+              {periodStats.demoPnl >= 0 ? '+' : ''}{periodStats.demoPnl.toFixed(2)} USDT
+            </div>
+            <div className="text-[10px] text-muted-foreground">{periodStats.demoTrades} closed · {periodStats.demoWinRate.toFixed(0)}% win rate</div>
           </div>
           <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Invested</div>
-            <div className="text-lg font-bold font-['Space_Grotesk'] text-foreground">{performance.invested_amount.toFixed(2)} USDT</div>
+            <div className="text-xs text-muted-foreground mb-1">Pionex P/L · {plFilter}</div>
+            <div className={cn('text-lg font-bold font-["Space_Grotesk"]', periodStats.livePnl >= 0 ? 'text-positive' : 'text-negative')}>
+              {periodStats.livePnl >= 0 ? '+' : ''}{periodStats.livePnl.toFixed(2)} USDT
+            </div>
+            <div className="text-[10px] text-muted-foreground">{periodStats.liveTrades} closed · {periodStats.liveWinRate.toFixed(0)}% win rate</div>
           </div>
           <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Unrealized P/L</div>
+            <div className="text-xs text-muted-foreground mb-1">Demo Unrealized</div>
             <div className={cn('text-lg font-bold font-["Space_Grotesk"]', performance.unrealized_pnl >= 0 ? 'text-positive' : 'text-negative')}>
               {performance.unrealized_pnl >= 0 ? '+' : ''}{performance.unrealized_pnl.toFixed(2)} USDT
             </div>
+            <div className="text-[10px] text-muted-foreground">{openTrades.length} open trades</div>
           </div>
           <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Win Rate</div>
-            <div className="text-lg font-bold font-['Space_Grotesk'] text-foreground">{performance.win_rate.toFixed(1)}%</div>
+            <div className="text-xs text-muted-foreground mb-1">Demo Account</div>
+            <div className="text-lg font-bold font-['Space_Grotesk'] text-foreground">{performance.account_value.toFixed(2)} USDT</div>
+            <div className="text-[10px] text-muted-foreground">All-time · {performance.total_return_pct >= 0 ? '+' : ''}{performance.total_return_pct.toFixed(2)}%</div>
           </div>
         </div>
 
@@ -1059,7 +1220,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-primary" />
-              <h3 className="text-sm font-bold font-['Space_Grotesk'] text-foreground">P/L PERFORMANCE</h3>
+              <h3 className="text-sm font-bold font-['Space_Grotesk'] text-foreground">DEMO P/L PERFORMANCE</h3>
             </div>
             <div className="flex items-center gap-3 text-xs">
               <div className="text-right">
@@ -1314,17 +1475,8 @@ export default function DashboardPage() {
         </Panel>
       </div>
 
-      {/* Live Positions + System Status */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Panel className="flex flex-col">
-          <PanelHeader title="Live Positions" icon={TrendingUp} action={
-            <span className="text-xs text-muted-foreground">Pionex</span>
-          } />
-          <div className="flex-1 min-h-0">
-            <DashboardLivePositionsPanel pionexConnected={pionexConnected} />
-          </div>
-        </Panel>
-
+      {/* System Status */}
+      <div className="grid grid-cols-1 gap-4">
         <Panel>
           <PanelHeader title="System Status" icon={Server} />
           <div className="space-y-2">
