@@ -22,6 +22,5 @@ BEGIN
 END
 $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS demo_trades_one_open_per_user
-ON demo_trades (user_id)
-WHERE status = 'open';
+-- DISABLED: Multiple simultaneous open demo trades are allowed.
+-- The previous one-open-trade restriction is intentionally removed.

@@ -2467,17 +2467,6 @@ export function TradingProvider({ children }: { children: ReactNode }) {
       throw new Error('Not authenticated');
     }
 
-    // Idempotency guard: en bruker skal aldri ha mer enn én OPEN trade.
-    if (openTradesRef.current.length > 0) {
-      const existing = openTradesRef.current[0];
-      console.log('[DEMO_TRADE_BLOCKED]', {
-        reason: 'open_trade_exists',
-        existingTradeId: existing.id,
-        pair: existing.pair,
-      });
-      throw new Error('Allerede en åpen trade');
-    }
-
     const investment = Number(trade.investment);
     const currentBalance = Number(demoAccount.balance);
 
