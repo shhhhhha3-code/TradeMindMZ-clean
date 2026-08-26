@@ -28,30 +28,49 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 3. Sett opp Android SDK
+      # 3. Sett opp Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      # 4. Sett opp pnpm
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+
+      # 5. Installer prosjektets dependencies
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 6. Sett opp Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           # Kun cmdline-tools; SDK-komponentene installeres eksplisitt under.
           cmdline-tools-version: '11076708'
 
-      # 4. Installer nødvendige SDK-komponenter
+      # 7. Installer nødvendige SDK-komponenter
       - name: Install Android SDK components
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "platform-tools"
 
-      # 5. Gjør gradlew kjørbar
+      # 8. Gjør gradlew kjørbar
       - name: Grant execute permission for gradlew
         working-directory: ./android
         run: chmod +x gradlew
 
-      # 6. Bygg debug APK
+      # 9. Bygg debug APK
       - name: Build debug APK
         working-directory: ./android
         run: ./gradlew assembleDebug --stacktrace
 
-      # 7. Last opp app-debug.apk som artifact
+      # 10. Last opp app-debug.apk som artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
