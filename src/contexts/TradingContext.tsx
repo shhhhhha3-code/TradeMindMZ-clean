@@ -262,7 +262,7 @@ export function TradingProvider({ children }: { children: ReactNode }) {
   const [aiAnalysisEnabled, setAiAnalysisEnabledState] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('tmz_ai_analysis_enabled');
-      return saved !== 'false';
+      return saved === 'true';
     } catch {
       return true;
     }
@@ -393,6 +393,13 @@ export function TradingProvider({ children }: { children: ReactNode }) {
     setAiAnalysisEnabledState(enabled);
     try { localStorage.setItem('tmz_ai_analysis_enabled', String(enabled)); } catch { /* ignore */ }
     setLastAnalysisError(null);
+
+    if (!enabled) {
+      // Purge any model-generated signal from the visible pool immediately.
+      allSignalsPoolRef.current = [];
+      setLiveSignals([]);
+      setScanStats((prev) => prev ? { ...prev, analyzedByAI: 0, openaiCount: 0, groqCount: 0 } : prev);
+    }
   }, []);
 
   const setDryRunMode = useCallback((enabled: boolean) => {
@@ -621,6 +628,48 @@ export function TradingProvider({ children }: { children: ReactNode }) {
   // The polling useEffect below enforces this guarantee.
 
   const refreshSignals = useCallback(async () => {
+    // AI OFF: use the latest server-generated cache only. Do not invoke the
+    // analysis function from the client, which keeps the toggle a real cost
+    // control. The server scheduler continues to generate local recommendations.
+    if (!aiAnalysisEnabled) {
+      try {
+        const { data, error } = await supabase
+          .from('ai_signals_cache')
+          .select('*')
+          .eq('id', 'global')
+          .maybeSingle();
+
+        if (error) throw error;
+
+        const serverSignals = Array.isArray(data?.signals)
+          ? (data.signals as AISignal[]).filter((signal) => {
+              const source = String(signal.ai_source ?? '').toLowerCase();
+              return source === '' || source === 'server' || source === 'local';
+            })
+          : [];
+
+        allSignalsPoolRef.current = serverSignals;
+        setSignalsCache(data as AISignalsCache | null);
+        setLiveSignals(serverSignals);
+        setLastAIUpdate(data?.updated_at ? new Date(data.updated_at) : null);
+        setAiAnalysisStatus('idle');
+        setScanStats((prev) => ({
+          pairsScanned: data?.pairs_scanned ?? prev?.pairsScanned ?? 0,
+          analyzedByAI: 0,
+          opportunities: serverSignals.length,
+          openaiCount: 0,
+          groqCount: 0,
+          cachedCount: data?.cached_count ?? 0,
+          rotationCount: data?.rotation_count ?? 0,
+        }));
+        return;
+      } catch (error) {
+        console.warn('[AI_OFF_SERVER_CACHE_LOAD_FAILED]', String(error));
+        setAiAnalysisStatus('error');
+        return;
+      }
+    }
+
     // Block if pool hasn't been seeded from DB yet (prevents race on mount)
     if (!poolSeededRef.current) return;
     // Deduplicate: if already running, skip — but do NOT set 'updating' if blocked,
@@ -674,6 +723,13 @@ export function TradingProvider({ children }: { children: ReactNode }) {
       signalsFetchingRef.current = false;
     }
   }, [aiAnalysisEnabled, mergeIntoPool, recomputeLiveSignals]);
+
+  // Apply AI mode changes immediately. OFF never invokes the AI provider; it
+  // refreshes only the server-generated cache. ON opts back into model review.
+  useEffect(() => {
+    if (!user || !poolSeededRef.current) return;
+    void refreshSignalsRef.current();
+  }, [aiAnalysisEnabled, user]);
 
   // ── Check if Pionex account is connected ──────────────────────────────
 
@@ -762,19 +818,24 @@ export function TradingProvider({ children }: { children: ReactNode }) {
         if (cache) {
           setSignalsCache(cache);
           setLastAIUpdate(new Date(cache.updated_at));
-          // Seed pool from DB → signals visible immediately after page refresh
-          if (Array.isArray(cache.signals)) mergeIntoPoolRef.current(cache.signals);
+          const visibleSignals = (cache.signals ?? []).filter((signal) => {
+            if (aiAnalysisEnabled) return true;
+            const source = String(signal.ai_source ?? '').toLowerCase();
+            return source === '' || source === 'server' || source === 'local';
+          });
+          // Seed pool from DB → signals visible immediately after page refresh.
+          if (Array.isArray(visibleSignals)) mergeIntoPoolRef.current(visibleSignals);
           setScanStats({
             pairsScanned: cache.pairs_scanned ?? 0,
-            analyzedByAI: cache.analyzed_count ?? 0,
-            opportunities: (cache.signals ?? []).filter(s => {
+            analyzedByAI: aiAnalysisEnabled ? (cache.analyzed_count ?? 0) : 0,
+            opportunities: visibleSignals.filter(s => {
               const age = Date.now() - new Date(s.generated_at).getTime();
               const ttl = holdingTimeToMsFE((s as { holding_time?: string | null }).holding_time);
               return age < ttl;
             }).length,
-            openaiCount:   (cache.openai_count ?? cache.gemini_count) ?? 0,
-            groqCount:     cache.groq_count     ?? 0,
-            cachedCount:   cache.cached_count   ?? 0,
+            openaiCount:   aiAnalysisEnabled ? ((cache.openai_count ?? cache.gemini_count) ?? 0) : 0,
+            groqCount:     aiAnalysisEnabled ? (cache.groq_count ?? 0) : 0,
+            cachedCount:   cache.cached_count ?? 0,
             rotationCount: cache.rotation_count ?? 0,
           });
         }
@@ -2514,8 +2575,14 @@ export function TradingProvider({ children }: { children: ReactNode }) {
       // from showing a successful trade while the balance update fails.
       await updateDemoBalance(user.id, newBalance);
 
+      let createdTrade: DemoTrade;
       try {
-        await openDemoTrade({ ...trade, investment, quantity });
+        createdTrade = await openDemoTrade({
+          ...trade,
+          user_id: user.id,
+          investment,
+          quantity,
+        });
       } catch (e) {
         // Roll back the balance if creating the demo trade fails.
         try {
@@ -2523,9 +2590,6 @@ export function TradingProvider({ children }: { children: ReactNode }) {
         } catch (rollbackError) {
           console.error('[DEMO_BALANCE_ROLLBACK_FAILED]', rollbackError);
         }
-
-        // Preserve the real database error. Do not translate unrelated
-        // UNIQUE/CONSTRAINT errors into a misleading open-trade conflict.
         throw e;
       }
 
@@ -2533,15 +2597,14 @@ export function TradingProvider({ children }: { children: ReactNode }) {
         prev ? { ...prev, balance: newBalance } : prev
       );
 
-      const updated = await getOpenDemoTrades(user.id);
-
-      // Keep refs synchronized before React re-renders.
+      // The INSERT already returned the authoritative row. Update the UI
+      // directly instead of performing a second read that could fail under a
+      // transient RLS/network condition after a successful INSERT.
+      const updated = [createdTrade, ...openTradesRef.current.filter(t => t.id !== createdTrade.id)];
       openTradesRef.current = updated;
       setOpenTrades(updated);
 
-      return updated.find(
-        t => t.pair === trade.pair && t.signal_id === trade.signal_id
-      ) ?? null;
+      return createdTrade;
     } catch (e) {
       console.error('[DEMO_BUY_FAILED]', e);
       throw e;

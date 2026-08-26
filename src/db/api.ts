@@ -63,11 +63,14 @@ export async function getDemoAccount(userId: string): Promise<DemoAccount | null
 }
 
 export async function updateDemoBalance(userId: string, newBalance: number) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('demo_accounts')
     .update({ balance: newBalance })
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .select('balance')
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('Demo account balance update was not applied');
 }
 
 export async function resetDemoAccount(userId: string) {
@@ -110,6 +113,7 @@ export async function getOpenDemoTrades(userId: string): Promise<DemoTrade[]> {
 }
 
 export async function openDemoTrade(trade: {
+  user_id: string;
   symbol: string;
   pair: string;
   coin_name: string;
@@ -121,9 +125,24 @@ export async function openDemoTrade(trade: {
   signal_id?: string;
   signal_type?: 'BUY' | 'SELL';
   ai_confidence?: number;
-}) {
-  const { error } = await supabase.from('demo_trades').insert(trade);
+}): Promise<DemoTrade> {
+  const { data, error } = await supabase.rpc('open_demo_trade_atomic', {
+    p_user_id: trade.user_id,
+    p_symbol: trade.symbol,
+    p_pair: trade.pair,
+    p_coin_name: trade.coin_name,
+    p_buy_price: trade.buy_price,
+    p_quantity: trade.quantity,
+    p_investment: trade.investment,
+    p_stop_loss: trade.stop_loss ?? null,
+    p_take_profit: trade.take_profit ?? null,
+    p_signal_id: trade.signal_id ?? null,
+    p_signal_type: trade.signal_type ?? null,
+    p_ai_confidence: trade.ai_confidence ?? null,
+  }).maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('Demo trade was not created');
+  return data as DemoTrade;
 }
 
 export async function closeDemoTrade(tradeId: string) {

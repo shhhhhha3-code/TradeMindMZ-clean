@@ -226,10 +226,12 @@
 .matrix-shell {
   position: relative;
   isolation: isolate;
+  overflow: hidden;
   background:
-    radial-gradient(circle at 70% -10%, rgba(40,255,150,.10), transparent 28%),
-    radial-gradient(circle at 10% 80%, rgba(0,220,255,.055), transparent 24%),
-    #020604;
+    radial-gradient(ellipse at 50% -15%, rgba(0,255,160,.14), transparent 32%),
+    radial-gradient(circle at 90% 10%, rgba(0,210,255,.10), transparent 24%),
+    radial-gradient(circle at 5% 70%, rgba(28,92,255,.08), transparent 28%),
+    linear-gradient(135deg, #010403 0%, #020a07 42%, #020614 100%);
 }
 .matrix-shell::before {
   content: '';
@@ -237,13 +239,14 @@
   inset: 0;
   pointer-events: none;
   z-index: -1;
-  opacity: .28;
+  opacity: .42;
   background-image:
-    linear-gradient(rgba(45,255,150,.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(45,255,150,.045) 1px, transparent 1px),
-    radial-gradient(circle, rgba(55,255,155,.16) 1px, transparent 1.5px);
-  background-size: 32px 32px, 32px 32px, 80px 80px;
-  mask-image: linear-gradient(to bottom, black, transparent 90%);
+    linear-gradient(rgba(55,255,175,.075) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(40,180,255,.055) 1px, transparent 1px),
+    radial-gradient(circle at 15% 25%, rgba(0,255,160,.18) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 80% 65%, rgba(0,190,255,.12) 0 1px, transparent 1.5px);
+  background-size: 28px 28px, 28px 28px, 90px 90px, 120px 120px;
+  mask-image: linear-gradient(to bottom, black 0%, black 72%, transparent 100%);
 }
 .matrix-shell::after {
   content: '';
@@ -251,10 +254,64 @@
   inset: 0;
   pointer-events: none;
   z-index: -1;
-  background: linear-gradient(to bottom, transparent 0%, rgba(70,255,150,.035) 50%, transparent 100%);
-  background-size: 100% 7px;
-  animation: matrix-scan 8s linear infinite;
+  background:
+    linear-gradient(90deg, transparent 0%, rgba(0,255,170,.045) 50%, transparent 100%),
+    repeating-linear-gradient(0deg, transparent 0 5px, rgba(70,255,160,.025) 6px, transparent 7px);
+  animation: matrix-scan 7s linear infinite, matrix-sweep 9s ease-in-out infinite;
 }
+.matrix-shell [data-slot='card'] {
+  background:
+    linear-gradient(145deg, rgba(7,18,14,.92), rgba(3,9,8,.90)) !important;
+  border-color: rgba(75,255,180,.14) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(180,255,225,.045),
+    0 18px 55px rgba(0,0,0,.28),
+    0 0 0 1px rgba(0,255,160,.018);
+  backdrop-filter: blur(14px);
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+.matrix-shell [data-slot='card']:hover {
+  transform: translateY(-1px);
+  border-color: rgba(80,255,180,.30) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(180,255,225,.06),
+    0 22px 65px rgba(0,0,0,.36),
+    0 0 34px rgba(0,255,160,.08);
+}
+.matrix-shell input,
+.matrix-shell textarea,
+.matrix-shell button,
+.matrix-shell [role='combobox'] {
+  backdrop-filter: blur(8px);
+}
+.matrix-shell button:hover {
+  filter: brightness(1.08);
+}
+.matrix-shell .border-border {
+  border-color: rgba(80,255,180,.12) !important;
+}
+
+.matrix-shell .recharts-cartesian-grid-horizontal line,
+.matrix-shell .recharts-cartesian-grid-vertical line {
+  stroke: rgba(88,255,190,.11) !important;
+}
+.matrix-shell .recharts-text {
+  fill: rgba(170,210,195,.58) !important;
+}
+.matrix-shell .recharts-tooltip-wrapper {
+  filter: drop-shadow(0 12px 30px rgba(0,0,0,.45));
+}
+.matrix-shell .recharts-default-tooltip {
+  background: rgba(2,8,6,.94) !important;
+  border: 1px solid rgba(80,255,180,.20) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 0 28px rgba(0,255,160,.08) !important;
+  backdrop-filter: blur(14px);
+}
+.matrix-shell .recharts-legend-item-text {
+  color: rgba(190,220,208,.72) !important;
+}
+
 .matrix-card {
   background: linear-gradient(145deg, rgba(7,18,13,.94), rgba(3,10,7,.94)) !important;
   border-color: rgba(50,255,150,.13) !important;
@@ -269,7 +326,27 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   letter-spacing: .02em;
 }
+
+.matrix-hud{opacity:.8}
+.matrix-corner{position:absolute;width:42px;height:42px;border-color:rgba(70,255,180,.38);border-style:solid;filter:drop-shadow(0 0 12px rgba(0,255,170,.12))}
+.matrix-corner-tl{top:18px;left:18px;border-width:2px 0 0 2px}.matrix-corner-tr{top:18px;right:18px;border-width:2px 2px 0 0}.matrix-corner-bl{bottom:18px;left:18px;border-width:0 0 2px 2px}.matrix-corner-br{bottom:18px;right:18px;border-width:0 2px 2px 0}
+.matrix-hud-line{position:absolute;left:7%;right:7%;height:1px;background:linear-gradient(90deg,transparent,rgba(0,255,170,.22),rgba(0,190,255,.16),transparent)}
+.matrix-hud-line-top{top:14px}.matrix-hud-line-bottom{bottom:14px}
+.matrix-terminal-bar{border:1px solid rgba(65,255,180,.16);background:linear-gradient(180deg,rgba(10,26,20,.78),rgba(2,10,7,.74));box-shadow:inset 0 1px 0 rgba(190,255,225,.04),0 12px 45px rgba(0,0,0,.22)}
+.matrix-glass{background:linear-gradient(145deg,rgba(9,24,18,.72),rgba(2,9,7,.66));border:1px solid rgba(70,255,180,.15);box-shadow:0 16px 55px rgba(0,0,0,.28),inset 0 1px 0 rgba(180,255,225,.04);backdrop-filter:blur(18px) saturate(1.15)}
+.matrix-shell .recharts-wrapper path{filter:drop-shadow(0 0 5px rgba(0,255,170,.22))}
+@keyframes matrix-column {
+  0% { transform: translateY(-18vh); opacity: 0; }
+  12% { opacity: .35; }
+  52% { opacity: 1; }
+  100% { transform: translateY(118vh); opacity: 0; }
+}
+
 @keyframes matrix-scan {
   from { transform: translateY(-8px); }
   to { transform: translateY(8px); }
+}
+@keyframes matrix-sweep {
+  0%, 100% { opacity: .35; transform: translateX(-8%); }
+  50% { opacity: .9; transform: translateX(8%); }
 }

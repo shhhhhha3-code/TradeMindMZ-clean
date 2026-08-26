@@ -20,6 +20,9 @@ import { useTrading } from '@/contexts/TradingContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 
+const MATRIX_GLYPHS = '01<>/\\[]{}$#@';
+const MATRIX_COLUMNS = Array.from({ length: 18 }, (_, index) => index);
+
 type ShellProps = {
   children: React.ReactNode;
   onMobileClose?: () => void;
@@ -122,7 +125,26 @@ export default function TradeMindShell({ children }: ShellProps) {
 
   return (
     <div className="matrix-shell min-h-screen w-full text-white">
-      <div className="flex min-h-screen">
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden opacity-[.11]">
+        {MATRIX_COLUMNS.map((column) => (
+          <div
+            key={column}
+            className="absolute top-[-18vh] whitespace-pre font-mono text-[10px] leading-[1.45] text-emerald-300 animate-[matrix-column_13s_linear_infinite]"
+            style={{ left: `${column * 5.7}%`, animationDelay: `${-(column % 7) * 1.7}s` }}
+          >
+            {Array.from({ length: 70 }, (_, row) => MATRIX_GLYPHS[(column * 7 + row * 3) % MATRIX_GLYPHS.length]).join('\n')}
+          </div>
+        ))}
+      </div>
+      <div className="matrix-hud pointer-events-none fixed inset-0 z-[1]">
+        <div className="matrix-corner matrix-corner-tl" />
+        <div className="matrix-corner matrix-corner-tr" />
+        <div className="matrix-corner matrix-corner-bl" />
+        <div className="matrix-corner matrix-corner-br" />
+        <div className="matrix-hud-line matrix-hud-line-top" />
+        <div className="matrix-hud-line matrix-hud-line-bottom" />
+      </div>
+      <div className="relative z-10 flex min-h-screen">
         <aside
           className={[
             'fixed inset-y-0 left-0 z-50 flex w-[250px] shrink-0 flex-col',
@@ -290,7 +312,14 @@ export default function TradeMindShell({ children }: ShellProps) {
               </div>
             </div>
 
-            <div className="hidden items-center gap-3 text-[8px] md:flex">
+            <div className="hidden items-center gap-2 md:flex">
+              <div className="matrix-terminal flex items-center gap-2 rounded-lg border border-emerald-300/10 bg-emerald-300/[.035] px-3 py-1.5 text-[8px] text-emerald-200/80">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(45,255,150,.95)]" />
+                <span>MARKET</span>
+                <span className="text-emerald-400/40">//</span>
+                <strong>{String(trading?.marketDataStatus ?? 'unknown').toUpperCase()}</strong>
+              </div>
+
               <div className="flex items-center gap-1.5">
                 <StatusDot active={trading?.marketDataStatus === 'live'} />
                 <span className="text-slate-600">Pionex</span>

@@ -1453,14 +1453,14 @@ Deno.serve(async (req) => {
   // AI model calls are opt-in from the client. Scheduled server scans use
   // use_ai=false so the local scoring/recommendation engine keeps running
   // without consuming OpenAI/Groq tokens.
-  let reqUseAI = true;
+  let reqUseAI = false;
   try {
     if (req.method === 'POST') {
       const rb = await req.clone().json().catch(() => ({}));
       reqSource  = String(rb?.source  ?? 'unknown');
       reqUserId  = rb?._user_id ? String(rb._user_id) : null;
       reqDryRun  = rb?.dry_run === true;
-      reqUseAI   = rb?.use_ai === undefined ? reqSource !== 'scheduler' : rb.use_ai === true;
+      reqUseAI   = rb?.use_ai === true;
     }
   } catch { /* ignore */ }
 
@@ -2052,9 +2052,14 @@ Deno.serve(async (req) => {
 
     // ── Step 11: Merge with still-live existing signals ───────────────────
     // Reuse existingCacheRow fetched in Step 7 — no second DB read needed.
-    const existingSignals: Record<string, unknown>[] = Array.isArray(existingCacheRow?.signals)
+    const existingSignals: Record<string, unknown>[] = (Array.isArray(existingCacheRow?.signals)
       ? (existingCacheRow.signals as Record<string, unknown>[])
-      : [];
+      : [])
+      .filter((signal) => {
+        if (reqUseAI) return true;
+        const source = String(signal.ai_source ?? '').toLowerCase();
+        return source === '' || source === 'server' || source === 'local';
+      });
 
     // Keep only signals whose AI-recommended hold window has not yet elapsed.
     // Back-fill expires_at for any cached signal that was written before this fix.
