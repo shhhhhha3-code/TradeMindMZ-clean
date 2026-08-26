@@ -97,13 +97,27 @@ export async function refillDemoAccount(userId: string, amount: number) {
 
 // ─── Demo Trades ──────────────────────────────────────────
 export async function getOpenDemoTrades(userId: string): Promise<DemoTrade[]> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('demo_trades')
-    .select('*')
+    .select('id,pair,status,opened_at')
     .eq('user_id', userId)
     .eq('status', 'open')
     .order('opened_at', { ascending: false })
     .limit(50);
+
+  console.log('[DEMO_OPEN_TRADES_LOAD]', {
+    count: Array.isArray(data) ? data.length : 0,
+    ids: Array.isArray(data) ? data.map(t => t.id) : [],
+    pairs: Array.isArray(data) ? data.map(t => t.pair) : [],
+    statuses: Array.isArray(data) ? data.map(t => t.status) : [],
+    error: error ? {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    } : null,
+  });
+
   return Array.isArray(data) ? data : [];
 }
 
