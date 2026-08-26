@@ -121,7 +121,19 @@ export async function openDemoTrade(trade: {
   ai_confidence?: number;
 }) {
   const { error } = await supabase.from('demo_trades').insert(trade);
-  if (error) throw error;
+
+  if (error) {
+    console.error('[DEMO_TRADE_INSERT_ERROR]', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    });
+
+    throw new Error(
+      `Supabase demo_trades INSERT failed | code=${error.code ?? 'NONE'} | message=${error.message}`
+    );
+  }
 }
 
 export async function closeDemoTrade(tradeId: string) {
