@@ -52,6 +52,47 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: pnpm exec vite build
 
+      # TEMP: Verify GitHub Supabase secrets without exposing values
+      - name: Verify Supabase build environment
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          python3 - <<'PY2'
+          import os
+          import re
+
+          url = os.environ.get("VITE_SUPABASE_URL", "")
+          key = os.environ.get("VITE_SUPABASE_ANON_KEY", "")
+
+          print("=== SUPABASE ENV SAFE CHECK ===")
+          print("URL present:", bool(url))
+          print("URL length:", len(url))
+          print("URL starts https:", url.startswith("https://"))
+          print("URL whitespace:", bool(re.search(r"\s", url)))
+          print("KEY present:", bool(key))
+          print("KEY length:", len(key))
+          print("KEY whitespace:", bool(re.search(r"\s", key)))
+          print("KEY quotes:", '"' in key or "'" in key)
+          print("KEY ASCII:", all(ord(c) < 128 for c in key))
+          print("KEY JWT parts:", len(key.split(".")))
+          print("KEY JWT-like:", len(key.split(".")) == 3)
+
+          if not url or not key:
+              raise SystemExit("ERROR: Supabase secret missing")
+
+          if not url.startswith("https://"):
+              raise SystemExit("ERROR: Supabase URL format invalid")
+
+          if re.search(r"\s", url) or re.search(r"\s", key):
+              raise SystemExit("ERROR: Supabase secret contains whitespace")
+
+          if len(key.split(".")) != 3:
+              raise SystemExit("ERROR: Supabase key is not JWT-like")
+
+          print("RESULT: SUPABASE BUILD ENVIRONMENT OK")
+          PY2
+
       # 7. Kopier web assets inn i Capacitor Android
       - name: Copy web assets to Android
         run: pnpm exec cap copy android
