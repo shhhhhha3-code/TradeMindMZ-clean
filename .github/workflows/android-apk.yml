@@ -32,12 +32,8 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # Kun det minimum som trengs for å bygge APK
-          api-level: 33
-          # build-tools, plattform og ndk via komponentinstallering
+          # Kun cmdline-tools; SDK-komponentene installeres eksplisitt under.
           cmdline-tools-version: '11076708'
-          # Kun installér byggeverktøy og plattform
-          # (actions-install-android-sdk, men setup-android alene gir cmdline-tools)
 
       # 4. Installer nødvendige SDK-komponenter
       - name: Install Android SDK components
