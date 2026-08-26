@@ -47,6 +47,9 @@ jobs:
 
       # 6. Bygg React/Vite webappen
       - name: Build web app
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: pnpm exec vite build
 
       # 7. Kopier web assets inn i Capacitor Android
