@@ -1450,12 +1450,17 @@ Deno.serve(async (req) => {
   let reqSource = 'unknown';
   let reqUserId: string | null = null;
   let reqDryRun = false;
+  // AI model calls are opt-in from the client. Scheduled server scans use
+  // use_ai=false so the local scoring/recommendation engine keeps running
+  // without consuming OpenAI/Groq tokens.
+  let reqUseAI = true;
   try {
     if (req.method === 'POST') {
       const rb = await req.clone().json().catch(() => ({}));
       reqSource  = String(rb?.source  ?? 'unknown');
       reqUserId  = rb?._user_id ? String(rb._user_id) : null;
       reqDryRun  = rb?.dry_run === true;
+      reqUseAI   = rb?.use_ai === undefined ? reqSource !== 'scheduler' : rb.use_ai === true;
     }
   } catch { /* ignore */ }
 
@@ -1683,7 +1688,7 @@ Deno.serve(async (req) => {
       hist_sample_n:   c.hist_sample_n,
       setup_tier:      classifySetupTier(c),
       server_verdict:  (c.recommendation?.server_verdict ?? 'NO_TRADE') as 'RECOMMENDED' | 'WATCH' | 'NO_TRADE',
-      sent_to_ai:      aiCandidatePairs.has(c.pair),
+      sent_to_ai:      reqUseAI && aiCandidatePairs.has(c.pair),
       score_breakdown: c.score_breakdown,
       recommendation:  c.recommendation ? {
         local_score:       c.recommendation.local_score,
@@ -1702,8 +1707,8 @@ Deno.serve(async (req) => {
 
     diag.pairs_exploration     = aiCandidates.filter(c => c.is_exploration).length;
     diag.candidates_filtered   = localScored.length - aiCandidates.length;
-    diag.pairs_sent_to_ai      = aiCandidates.length;
-    diag.candidates_sent_to_ai = aiCandidates.length;
+    diag.pairs_sent_to_ai      = reqUseAI ? aiCandidates.length : 0;
+    diag.candidates_sent_to_ai = reqUseAI ? aiCandidates.length : 0;
     diag.selection_ms          = Date.now() - tSel0;
 
     console.log(
@@ -1735,7 +1740,7 @@ Deno.serve(async (req) => {
     await db.from('ai_signals_cache').upsert({
       id: 'global',
       pairs_scanned: totalPairs,
-      analyzed_count: aiCandidates.length,
+      analyzed_count: reqUseAI ? aiCandidates.length : 0,
       market_data: marketDataSnapshot,
       updated_at: now,
     }, { onConflict: 'id' });
@@ -1746,65 +1751,158 @@ Deno.serve(async (req) => {
     const existingCacheRow = await getCached();
     console.log(`[ai-analysis] Existing cache read: ${Date.now() - tCacheRead}ms`);
 
-    // ── Step 8: Parallel AI analysis with OpenAI → Groq fallback ───────────────
-    const openaiKey = Deno.env.get('OPENAI_API_KEY') ?? null;
-    if (!openaiKey) {
-      console.error('[ai-analysis] OPENAI_API_KEY not configured — cannot call primary AI');
-    }
-    const groqKey = Deno.env.get('GROQ_API_KEY') ?? null;
+    // ── Step 8: Optional AI review ───────────────────────────────────────────
+    // The server always performs market scanning + local scoring + objective
+    // recommendation scoring. OpenAI/Groq are only called when use_ai=true.
     const perfFeedback = await loadPerformanceFeedback(db);
     const tAI0 = Date.now();
 
-    // Phase 4: pass currently-live signals for FRESHNESS guard
     const currentLiveSignals: Record<string, unknown>[] = Array.isArray(existingCacheRow?.signals)
       ? (existingCacheRow.signals as Record<string, unknown>[])
       : [];
 
-    // V149: signal_history already loaded in Step 5 (localHistRows / signalHistoryForTPSL)
-    // No need for a second DB query here.
+    let allAIResults: CoinAIResult[] = [];
+    let aiVerdicts: unknown[] = [];
+    let aiSource: 'openai' | 'groq' | null = null;
+    let modelUsed: string | null = null;
+    let geminiStatus = 'disabled';
 
-    // V158: Pass local-scored candidates to runParallelAI.
-    // aiCandidates already contains local_score, recommendation breakdown, and server verdict.
-    // buildBatchPrompt will include the server-computed breakdown and AI returns verdicts.
-    const { results: aiResults, cachedResults, aiVerdicts, diagnostics: aiDiag } =
-      await runParallelAI(aiCandidates, histMap, perfFeedback, openaiKey ?? '', groqKey, currentLiveSignals, signalHistoryForTPSL);
+    if (reqUseAI) {
+      const openaiKey = Deno.env.get('OPENAI_API_KEY') ?? null;
+      const groqKey = Deno.env.get('GROQ_API_KEY') ?? null;
 
-    diag.ai_ms              = Date.now() - tAI0;
-    diag.openai_count       = aiDiag.openaiCount;
-    diag.groq_count         = aiDiag.groqCount;
-    diag.pairs_cached       = aiDiag.cachedCount;
-    diag.pairs_new_analysis = aiResults.length;
-    diag.openai_error_category = aiDiag.openaiErrorCategory;
-    diag.openai_error_detail   = aiDiag.openaiErrorDetail;
-    diag.openai_request_ms     = aiDiag.openaiRequestMs;
-    diag.openai_response_ms    = 0; // not streaming
-    diag.prompt_ms             = aiDiag.promptMs;
-    diag.groq_error_category   = aiDiag.groqErrorCategory;
-    diag.groq_error_detail     = aiDiag.groqErrorDetail;
-    // Phase 4 AI-stage counters
-    diag.ai_cache_hits   = aiDiag.cachedCount;
-    diag.ai_cache_misses = aiResults.length;
-    diag.ai_success      = aiDiag.aiSuccess;
-    diag.ai_timeout      = aiDiag.aiTimeout;
-    diag.ai_rate_limit   = aiDiag.aiRateLimit;
-    diag.ai_error        = aiDiag.aiError;
-    diag.ai_invalid_json = aiDiag.aiInvalidJson;
-    diag.ai_verdicts = aiVerdicts;
-    console.log(`[ai-analysis] AI stage: ${diag.ai_ms}ms openai_err=${diag.openai_error_category ?? 'none'} groq_err=${diag.groq_error_category ?? 'none'}`);
+      if (!openaiKey) console.warn('[ai-analysis] OPENAI_API_KEY not configured');
 
-    const allAIResults = [...aiResults, ...cachedResults];
+      const { results: aiResults, cachedResults, aiVerdicts: verdicts, diagnostics: aiDiag } =
+        await runParallelAI(
+          aiCandidates,
+          histMap,
+          perfFeedback,
+          openaiKey ?? '',
+          groqKey,
+          currentLiveSignals,
+          signalHistoryForTPSL,
+        );
 
-    // Determine overall ai_source (primary source used in this run)
-    const aiSource: 'openai' | 'groq' =
-      aiDiag.openaiCount > 0 ? 'openai' : 'groq';
-    const modelUsed = aiDiag.openaiCount > 0
-      ? `openai/${OPENAI_MODEL}`
-      : `groq/${GROQ_MODEL}`;
+      diag.ai_ms = Date.now() - tAI0;
+      diag.openai_count = aiDiag.openaiCount;
+      diag.groq_count = aiDiag.groqCount;
+      diag.pairs_cached = aiDiag.cachedCount;
+      diag.pairs_new_analysis = aiResults.length;
+      diag.openai_error_category = aiDiag.openaiErrorCategory;
+      diag.openai_error_detail = aiDiag.openaiErrorDetail;
+      diag.openai_request_ms = aiDiag.openaiRequestMs;
+      diag.openai_response_ms = 0;
+      diag.prompt_ms = aiDiag.promptMs;
+      diag.groq_error_category = aiDiag.groqErrorCategory;
+      diag.groq_error_detail = aiDiag.groqErrorDetail;
+      diag.ai_cache_hits = aiDiag.cachedCount;
+      diag.ai_cache_misses = aiResults.length;
+      diag.ai_success = aiDiag.aiSuccess;
+      diag.ai_timeout = aiDiag.aiTimeout;
+      diag.ai_rate_limit = aiDiag.aiRateLimit;
+      diag.ai_error = aiDiag.aiError;
+      diag.ai_invalid_json = aiDiag.aiInvalidJson;
+      aiVerdicts = verdicts;
+      allAIResults = [...aiResults, ...cachedResults];
+      aiSource = aiDiag.openaiCount > 0 ? 'openai' : (aiDiag.groqCount > 0 ? 'groq' : null);
+      modelUsed = aiDiag.openaiCount > 0
+        ? `openai/${OPENAI_MODEL}`
+        : (aiDiag.groqCount > 0 ? `groq/${GROQ_MODEL}` : null);
+      geminiStatus = aiDiag.openaiCount > 0
+        ? 'connected'
+        : (aiDiag.openaiErrorCategory ?? 'error');
+      console.log(`[ai-analysis] AI stage enabled: ${diag.ai_ms}ms openai=${diag.openai_count} groq=${diag.groq_count}`);
+    } else {
+      // Server-only mode: turn the deterministic recommendation engine into
+      // tradeable signal objects. No OpenAI/Groq request is made.
+      const serverCandidates = localScored
+        .filter(c => c.recommendation?.server_verdict === 'RECOMMENDED')
+        .slice(0, MAX_SIGNALS);
 
-    // openai_status maps to exact error category or 'connected'
-    const geminiStatus: string = aiDiag.openaiCount > 0
-      ? 'connected'
-      : (aiDiag.openaiErrorCategory ?? 'error');
+      const localSignals = serverCandidates.map((c, index) => {
+        const sigType = c.signal_bias === 'SELL_BIAS' ? 'SELL' : 'BUY';
+        const entry = c.price;
+        let tp1 = entry * (sigType === 'BUY' ? 1.015 : 0.985);
+        let tp2 = entry * (sigType === 'BUY' ? 1.03 : 0.97);
+        let sl  = entry * (sigType === 'BUY' ? 0.99 : 1.01);
+
+        try {
+          const stats = buildHistoricalStats(signalHistoryForTPSL, c.pair, sigType);
+          const dyn = computeDynamicTPSL(entry, sigType, stats, c.atr_pct || 2, c.pair);
+          tp1 = dyn.tp1; tp2 = dyn.tp2; sl = dyn.sl;
+        } catch (e) {
+          console.warn(`[ai-analysis] local TP/SL fallback for ${c.pair}:`, String(e));
+        }
+
+        const rr = Math.abs(tp1 - entry) / Math.max(Math.abs(entry - sl), entry * 0.0001);
+        const rec = c.recommendation!;
+        const confidence = Math.round(rec.confidence);
+        const strength = Math.round(rec.strength);
+        const riskLevel = c.atr_pct >= 5 ? 'HIGH' : c.atr_pct >= 2.5 ? 'MEDIUM' : 'LOW';
+        const nowLocal = new Date().toISOString();
+
+        return {
+          id: `server_${c.pair.replace('/', '_')}_${Date.now()}_${index}`,
+          symbol: c.symbol,
+          pair: c.pair,
+          coin_name: c.coin_name,
+          current_price: entry,
+          price_change_24h: c.change_24h,
+          signal_type: sigType,
+          verdict: 'RECOMMENDED',
+          confidence,
+          risk_level: riskLevel,
+          entry_zone_low: Number((entry * 0.998).toFixed(8)),
+          entry_zone_high: Number((entry * 1.002).toFixed(8)),
+          take_profit_1: tp1,
+          take_profit_2: tp2,
+          stop_loss: sl,
+          risk_reward: rr.toFixed(2),
+          holding_time: '3-6 hours',
+          signal_strength: strength,
+          reasoning: {
+            trend: `${c.market_regime} regime; EMA9 ${c.price_vs_ema9}.`,
+            momentum: `${c.momentum}; local score ${c.local_score}/100.`,
+            rsi: c.rsi_14,
+            macd: `MACD histogram ${c.macd_histogram.toFixed(4)}.`,
+            volume: `24h volume ${Math.round(c.volume_24h_usdt).toLocaleString()} USDT.`,
+            support: `Support ${c.support_level}; resistance ${c.resistance_level}.`,
+            conclusion: `SERVER RECOMMENDED — deterministic local scoring ${confidence}/100. AI model review is disabled.`,
+          },
+          generated_at: nowLocal,
+          expires_at: new Date(Date.now() + holdingTimeToMs('3-6 hours')).toISOString(),
+          server_verdict: 'RECOMMENDED',
+          recommendation_score: confidence,
+          recommendation_breakdown: rec,
+          ai_source: null,
+        } as Record<string, unknown>;
+      });
+
+      allAIResults = localSignals.map(signal => ({
+        pair: String(signal.pair),
+        signals: [signal],
+        sentiment: { score: 50, label: 'Neutral' },
+        aiSource: 'cache' as const,
+      }));
+      diag.ai_ms = 0;
+      diag.openai_count = 0;
+      diag.groq_count = 0;
+      diag.pairs_cached = 0;
+      diag.pairs_new_analysis = localSignals.length;
+      diag.ai_cache_hits = 0;
+      diag.ai_cache_misses = 0;
+      diag.ai_success = 0;
+      diag.ai_timeout = 0;
+      diag.ai_rate_limit = 0;
+      diag.ai_error = 0;
+      diag.ai_invalid_json = 0;
+      diag.ai_verdicts = [];
+      aiSource = null;
+      modelUsed = 'server/local-scorer';
+      geminiStatus = 'disabled';
+      console.log(`[ai-analysis] SERVER_ONLY mode: ${localSignals.length} deterministic recommendations; no AI provider call`);
+    }
 
     // ── Step 9: Collect + validate signals ───────────────────────────────
     const priceMap: Record<string, number> = {};
@@ -1896,7 +1994,7 @@ Deno.serve(async (req) => {
           id: `sig_${pair.replace('/', '_')}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           generated_at: now,
           expires_at:   new Date(Date.now() + holdingTimeToMs(sig.holding_time != null ? String(sig.holding_time) : null)).toISOString(),
-          ai_source: result.aiSource,
+          ai_source: aiSource ?? null,
         });
       }
     }
@@ -2008,7 +2106,7 @@ Deno.serve(async (req) => {
         market_data: marketDataSnapshot,
         market_sentiment: allAIResults[0]?.sentiment ?? existingCacheRow?.market_sentiment ?? { score: 50, label: 'Neutral' },
         pairs_scanned:   totalPairs,
-        analyzed_count:  aiCandidates.length,
+        analyzed_count:  reqUseAI ? aiCandidates.length : 0,
         generated_at:    existingCacheRow?.generated_at ?? now,
         updated_at:      now,
         ai_source:       aiSource,

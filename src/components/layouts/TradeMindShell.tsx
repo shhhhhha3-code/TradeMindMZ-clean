@@ -14,6 +14,7 @@ import {
   Terminal,
   Wallet,
   X,
+  BrainCircuit,
 } from 'lucide-react';
 import { useTrading } from '@/contexts/TradingContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -78,7 +79,7 @@ function SidebarLink({
     >
       <Icon className="h-4 w-4 shrink-0" />
       <span className="truncate">{label}</span>
-      {active && <ChevronRight className="ml-auto h-3.5 w-3.5 text-violet-300" />}
+      {active && <ChevronRight className="ml-auto h-3.5 w-3.5 text-emerald-300" />}
     </Link>
   );
 }
@@ -120,12 +121,12 @@ export default function TradeMindShell({ children }: ShellProps) {
     'TradeMindMZ';
 
   return (
-    <div className="min-h-screen w-full bg-[#050914] text-white">
+    <div className="matrix-shell min-h-screen w-full text-white">
       <div className="flex min-h-screen">
         <aside
           className={[
             'fixed inset-y-0 left-0 z-50 flex w-[250px] shrink-0 flex-col',
-            'border-r border-white/[.07] bg-[#070b15]',
+            'border-r border-emerald-400/10 bg-[#020805]/95 backdrop-blur-xl',
             'transform transition-transform duration-200 md:static md:z-auto md:flex md:translate-x-0',
             mobileOpen ? 'translate-x-0' : '-translate-x-full',
           ].join(' ')}
@@ -139,7 +140,7 @@ export default function TradeMindShell({ children }: ShellProps) {
               />
               <div className="min-w-0">
                 <div className="font-['Space_Grotesk'] text-sm font-bold">
-                  TRADE<span className="text-violet-300">MIND</span>
+                  TRADE<span className="text-emerald-300">MIND</span>
                   <span className="text-emerald-400">MZ</span>
                 </div>
                 <div className="text-[8px] font-bold uppercase tracking-[.18em] text-slate-600">
@@ -206,7 +207,7 @@ export default function TradeMindShell({ children }: ShellProps) {
             <div className="mt-auto pt-4">
               <div className="rounded-xl border border-white/[.07] bg-white/[.02] p-3">
                 <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold text-slate-200">
-                  <Wallet className="h-3.5 w-3.5 text-violet-300" />
+                  <Wallet className="h-3.5 w-3.5 text-emerald-300" />
                   System Status
                 </div>
 
@@ -229,14 +230,14 @@ export default function TradeMindShell({ children }: ShellProps) {
                   <div className="flex justify-between gap-2">
                     <span className="text-slate-600">AI</span>
                     <span className="text-slate-300">
-                      {String(trading?.aiAnalysisStatus ?? 'idle').toUpperCase()}
+                      {trading?.aiAnalysisEnabled === false ? 'OFF / SERVER' : String(trading?.aiAnalysisStatus ?? 'idle').toUpperCase()}
                     </span>
                   </div>
                 </div>
               </div>
 
               <div className="mt-3 flex items-center gap-2 px-2 text-[10px] text-slate-400">
-                <div className="grid h-7 w-7 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-emerald-400 font-bold text-white">
+                <div className="grid h-7 w-7 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-400 font-bold text-white">
                   {displayName.slice(0, 2).toUpperCase()}
                 </div>
 
@@ -266,8 +267,8 @@ export default function TradeMindShell({ children }: ShellProps) {
           />
         )}
 
-        <div className="flex min-w-0 flex-1 flex-col bg-[radial-gradient(circle_at_78%_-12%,rgba(109,99,255,.12),transparent_32%)]">
-          <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-white/[.07] bg-[#050914]/90 px-3 backdrop-blur-xl md:px-6">
+        <div className="flex min-w-0 flex-1 flex-col bg-transparent">
+          <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-emerald-400/10 bg-[#020805]/80 px-3 backdrop-blur-xl md:px-6">
             <button
               onClick={() => setMobileOpen(value => !value)}
               className="grid h-9 w-9 place-items-center rounded-lg border border-white/[.08] bg-white/[.03] text-slate-400 md:hidden"
@@ -300,14 +301,22 @@ export default function TradeMindShell({ children }: ShellProps) {
 
               <div className="h-4 w-px bg-white/[.08]" />
 
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-600">AI</span>
-                <strong className="text-slate-300">
-                  {String(trading?.aiAnalysisStatus ?? 'idle').toUpperCase()}
-                </strong>
-              </div>
+              <button
+                type="button"
+                onClick={() => trading?.setAiAnalysisEnabled?.(!trading?.aiAnalysisEnabled)}
+                title={trading?.aiAnalysisEnabled === false ? 'Enable AI model analysis' : 'Disable AI model analysis and use server-only scoring'}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-semibold transition',
+                  trading?.aiAnalysisEnabled === false
+                    ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300'
+                    : 'border-cyan-400/20 bg-cyan-400/5 text-cyan-300 hover:border-cyan-300/40'
+                )}
+              >
+                <BrainCircuit className="h-3 w-3" />
+                {trading?.aiAnalysisEnabled === false ? 'SERVER ONLY' : 'AI ON'}
+              </button>
 
-              <div className="h-8 w-8 rounded-full bg-gradient-to-br from-violet-500 to-emerald-400" />
+              <div className="h-8 w-8 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-300 shadow-[0_0_18px_rgba(45,255,150,.25)]" />
             </div>
           </header>
 

@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS "public"."ai_signals_cache" (
     "diagnostics" "jsonb",
     "error_message" "text",
     "local_setups" "jsonb" DEFAULT '[]'::"jsonb",
-    CONSTRAINT "ai_signals_cache_ai_source_check" CHECK (("ai_source" = ANY (ARRAY['gemini'::"text", 'groq'::"text"]))),
+    CONSTRAINT "ai_signals_cache_ai_source_check" CHECK (("ai_source" IS NULL OR "ai_source" = ANY (ARRAY['openai'::"text", 'gemini'::"text", 'groq'::"text"]))),
     CONSTRAINT "ai_signals_cache_gemini_status_check" CHECK (("gemini_status" = ANY (ARRAY['connected'::"text", 'rate_limited'::"text", 'RATE_LIMIT'::"text", 'error'::"text"])))
 );
 
@@ -640,7 +640,7 @@ CREATE TABLE IF NOT EXISTS "public"."signal_history" (
     "recommendation_score" integer,
     "recommendation_breakdown" "jsonb",
     "setup_fingerprint" "text",
-    CONSTRAINT "signal_history_ai_source_check" CHECK (("ai_source" = ANY (ARRAY['gemini'::"text", 'groq'::"text"]))),
+    CONSTRAINT "signal_history_ai_source_check" CHECK (("ai_source" IS NULL OR "ai_source" = ANY (ARRAY['openai'::"text", 'gemini'::"text", 'groq'::"text"]))),
     CONSTRAINT "signal_history_expired_class_check" CHECK (("expired_class" = ANY (ARRAY['GOOD_DIRECTION'::"text", 'NEUTRAL'::"text", 'BAD_DIRECTION'::"text"]))),
     CONSTRAINT "signal_history_result_check" CHECK (("result" = ANY (ARRAY['WIN'::"text", 'LOSS'::"text", 'EXPIRED'::"text"]))),
     CONSTRAINT "signal_history_signal_type_check" CHECK (("signal_type" = ANY (ARRAY['BUY'::"text", 'SELL'::"text", 'HOLD'::"text", 'WAIT'::"text"]))),
@@ -1215,13 +1215,6 @@ $pg_schema_restore$;
 --
 
 CREATE INDEX IF NOT EXISTS "demo_trade_history_signal_id_idx" ON "public"."demo_trade_history" USING "btree" ("signal_id");
-
-
---
--- Name: demo_trades_one_open_per_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS "demo_trades_one_open_per_user" ON "public"."demo_trades" USING "btree" ("user_id") WHERE ("status" = 'open'::"text");
 
 
 --
@@ -2200,7 +2193,7 @@ BEGIN
         ''Content-Type'', ''application/json'',
         ''apikey'', (select decrypted_secret from vault.decrypted_secrets where name = ''publishable_key'')
       ),
-      body := jsonb_build_object(''scheduled'', true, ''source'', ''pg_cron'')
+      body := jsonb_build_object(''scheduled'', true, ''source'', ''scheduler'', ''use_ai'', false)
     ) AS request_id;
   ',
       active := true
@@ -2213,7 +2206,7 @@ BEGIN
         ''Content-Type'', ''application/json'',
         ''apikey'', (select decrypted_secret from vault.decrypted_secrets where name = ''publishable_key'')
       ),
-      body := jsonb_build_object(''scheduled'', true, ''source'', ''pg_cron'')
+      body := jsonb_build_object(''scheduled'', true, ''source'', ''scheduler'', ''use_ai'', false)
     ) AS request_id;
   ');
   END IF;
@@ -2233,7 +2226,7 @@ BEGIN
         ''apikey'', (select decrypted_secret from vault.decrypted_secrets where name = ''publishable_key''),
         ''Authorization'', ''Bearer '' || (select decrypted_secret from vault.decrypted_secrets where name = ''publishable_key'')
       ),
-      body := jsonb_build_object(''scheduled'', true, ''source'', ''pg_cron'')
+      body := jsonb_build_object(''scheduled'', true, ''source'', ''scheduler'', ''use_ai'', false)
     ) AS request_id;
   ',
       active := true
@@ -2247,7 +2240,7 @@ BEGIN
         ''apikey'', (select decrypted_secret from vault.decrypted_secrets where name = ''publishable_key''),
         ''Authorization'', ''Bearer '' || (select decrypted_secret from vault.decrypted_secrets where name = ''publishable_key'')
       ),
-      body := jsonb_build_object(''scheduled'', true, ''source'', ''pg_cron'')
+      body := jsonb_build_object(''scheduled'', true, ''source'', ''scheduler'', ''use_ai'', false)
     ) AS request_id;
   ');
   END IF;

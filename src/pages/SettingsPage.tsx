@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTrading } from '@/contexts/TradingContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,13 +8,15 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { supabase } from '@/db/supabase';
 import { updateProfile, getUserSettings, updateUserSettings } from '@/db/api';
 import type { UserSettings } from '@/types/types';
-import { User, Bell, Loader2, Eye, EyeOff, Shield } from 'lucide-react';
+import { User, Bell, Loader2, Eye, EyeOff, Shield, BrainCircuit, Server } from 'lucide-react';
 
 export default function SettingsPage() {
   const { user, profile, refreshProfile } = useAuth();
+  const { aiAnalysisEnabled, setAiAnalysisEnabled } = useTrading();
   const [displayName, setDisplayName] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -134,6 +137,44 @@ export default function SettingsPage() {
               Change Password
             </Button>
           </form>
+        </CardContent>
+      </Card>
+
+      {/* AI cost control */}
+      <Card className="border-border overflow-hidden" style={{ background: 'hsl(var(--card))' }}>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <BrainCircuit className="w-4 h-4 text-primary" /> AI analysis control
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-muted/30 p-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                {aiAnalysisEnabled ? 'AI model analysis ON' : 'AI model analysis OFF'}
+                <span className={cn(
+                  'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase',
+                  aiAnalysisEnabled ? 'bg-primary/15 text-primary' : 'bg-success/15 text-success'
+                )}>
+                  {aiAnalysisEnabled ? 'AI' : 'SERVER'}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                {aiAnalysisEnabled
+                  ? 'OpenAI/Groq can review the server-selected candidates.'
+                  : 'No AI provider calls. The server still scans markets, scores setups and recommends signals locally.'}
+              </p>
+              <div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground">
+                <Server className="h-3 w-3" /> Server market scanner remains active
+              </div>
+            </div>
+            <Switch
+              checked={aiAnalysisEnabled}
+              onCheckedChange={setAiAnalysisEnabled}
+              aria-label="Enable AI model analysis"
+              className="shrink-0"
+            />
+          </div>
         </CardContent>
       </Card>
 

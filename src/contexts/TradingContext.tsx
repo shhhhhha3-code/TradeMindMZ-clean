@@ -96,6 +96,9 @@ interface TradingContextValue {
   marketDataStatus: 'live' | 'cached' | 'error';
   pionexAccountStatus: 'connected' | 'disconnected' | 'error';
   aiAnalysisStatus: 'idle' | 'updating' | 'error';
+  /** AI model analysis can be disabled to save provider/API costs. Server-side local scoring remains active. */
+  aiAnalysisEnabled: boolean;
+  setAiAnalysisEnabled: (enabled: boolean) => void;
   lastAIUpdate: Date | null;
   lastAnalysisError: string | null;
   scanStats: {
@@ -256,6 +259,14 @@ export function TradingProvider({ children }: { children: ReactNode }) {
   const [marketDataStatus, setMarketDataStatus] = useState<'live' | 'cached' | 'error'>('cached');
   const [pionexAccountStatus, setPionexAccountStatus] = useState<'connected' | 'disconnected' | 'error'>('disconnected');
   const [aiAnalysisStatus, setAiAnalysisStatus] = useState<'idle' | 'updating' | 'error'>('idle');
+  const [aiAnalysisEnabled, setAiAnalysisEnabledState] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('tmz_ai_analysis_enabled');
+      return saved !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [lastAIUpdate, setLastAIUpdate] = useState<Date | null>(null);
   const [lastAnalysisError, setLastAnalysisError] = useState<string | null>(null);
   const [scanStats, setScanStats] = useState<{ pairsScanned: number; analyzedByAI: number; opportunities: number; openaiCount: number; groqCount: number; cachedCount: number; rotationCount: number } | null>(null);
@@ -378,6 +389,12 @@ export function TradingProvider({ children }: { children: ReactNode }) {
   }, [firstLiveTradeDone]);
 
   // Persist dry-run mode
+  const setAiAnalysisEnabled = useCallback((enabled: boolean) => {
+    setAiAnalysisEnabledState(enabled);
+    try { localStorage.setItem('tmz_ai_analysis_enabled', String(enabled)); } catch { /* ignore */ }
+    setLastAnalysisError(null);
+  }, []);
+
   const setDryRunMode = useCallback((enabled: boolean) => {
     setDryRunModeState(enabled);
     try { localStorage.setItem('tmz_dry_run_mode', String(enabled)); } catch { /* ignore */ }
@@ -614,7 +631,10 @@ export function TradingProvider({ children }: { children: ReactNode }) {
     setAiAnalysisStatus('updating');
     try {
       const { data, error } = await withTimeout(
-        supabase.functions.invoke('ai-analysis', { method: 'POST', body: {} }),
+        supabase.functions.invoke('ai-analysis', {
+          method: 'POST',
+          body: { use_ai: aiAnalysisEnabled, source: 'frontend' },
+        }),
         90_000
       );
       if (!error && data) {
@@ -653,7 +673,7 @@ export function TradingProvider({ children }: { children: ReactNode }) {
     } finally {
       signalsFetchingRef.current = false;
     }
-  }, [mergeIntoPool, recomputeLiveSignals]);
+  }, [aiAnalysisEnabled, mergeIntoPool, recomputeLiveSignals]);
 
   // ── Check if Pionex account is connected ──────────────────────────────
 
@@ -2504,13 +2524,8 @@ export function TradingProvider({ children }: { children: ReactNode }) {
           console.error('[DEMO_BALANCE_ROLLBACK_FAILED]', rollbackError);
         }
 
-        if (e instanceof Error && /one_open_per_user|unique|constraint/i.test(e.message)) {
-          console.log('[DEMO_TRADE_BLOCKED]', {
-            reason: 'database_open_trade_conflict',
-          });
-          throw new Error('Åpen trade-konflikt: kun én åpen trade per bruker');
-        }
-
+        // Preserve the real database error. Do not translate unrelated
+        // UNIQUE/CONSTRAINT errors into a misleading open-trade conflict.
         throw e;
       }
 
@@ -2558,8 +2573,8 @@ export function TradingProvider({ children }: { children: ReactNode }) {
     console.log('ENTRY_LOCK_ACQUIRED', { completedAt });
 
     try {
-      // Guard 3 — any open trade blocks a new entry (maks 1 åpen trade).
-      // In live mode, check live_orders; in demo mode, check demo open trades.
+      // Guard 3 — live trading keeps its one-open-order safety rule.
+      // Demo trading intentionally allows multiple simultaneous open trades.
       const isLive = isPionexLiveRef.current;
       const liveOpenCount = liveOrders.filter(o => ['NEW', 'PARTIALLY_FILLED', 'OPEN'].includes(o.status)).length;
       if (isLive) {
@@ -2567,21 +2582,6 @@ export function TradingProvider({ children }: { children: ReactNode }) {
           setAutoTraderLastAction(`Venter på at eksisterende live-trade lukkes — Scheduler-entry blokkert.`);
           setAutoTradeTrace({ mode: 'auto', timestamp: now(), triggered: true, preflight: null, place_order_called: false, pionex_request_sent: false, pionex_http_status: 'NOT_SENT', dry_run: dryRunMode, error_message: 'Open live trade exists' });
           console.log('ENTRY_BLOCKED', { reason: 'open_live_trade_exists', liveOpenCount });
-          return;
-        }
-      } else {
-        const currentOpen = openTradesRef.current;
-        if (currentOpen.length > 0) {
-          const trackedOpen = autoTraderTradeId
-            ? currentOpen.find(t => t.id === autoTraderTradeId)
-            : null;
-          setAutoTraderLastAction(
-            trackedOpen
-              ? `Overvåker ${trackedOpen.pair} · P/L: ${(trackedOpen.unrealized_pnl ?? 0).toFixed(3)} USDT`
-              : `Venter på at eksisterende trade lukkes (${currentOpen[0].pair}) — Scheduler-entry blokkert.`
-          );
-          setAutoTradeTrace({ mode: 'auto', timestamp: now(), triggered: true, preflight: null, place_order_called: false, pionex_request_sent: false, pionex_http_status: 'NOT_SENT', dry_run: dryRunMode, error_message: 'Open demo trade exists' });
-          console.log('ENTRY_BLOCKED', { reason: 'open_trade_exists', pair: currentOpen[0].pair, openTradeIds: currentOpen.map(t => t.id) });
           return;
         }
       }
@@ -2752,10 +2752,6 @@ export function TradingProvider({ children }: { children: ReactNode }) {
         console.log('ENTRY_BLOCKED', { reason: 'open_live_trade_appeared', pair: currentLiveOpen[0].pair });
         return;
       }
-    } else if (openTradesRef.current.length > 0) {
-      setAutoTraderLastAction(`Trade allerede aapen (${openTradesRef.current[0].pair}) - hopper over entry.`);
-      console.log('ENTRY_BLOCKED', { reason: 'open_trade_appeared', pair: openTradesRef.current[0].pair });
-      return;
     }
 
     console.log(isLive ? '[LIVE_ENTRY_REQUEST]' : 'ENTRY_OPENING', {
@@ -2990,7 +2986,7 @@ export function TradingProvider({ children }: { children: ReactNode }) {
   return (
     <TradingContext.Provider value={{
       demoAccount, openTrades, tradeHistory, signalsCache, liveSignals, marketPrices,
-      marketDataStatus, pionexAccountStatus, aiAnalysisStatus, lastAIUpdate, lastAnalysisError,
+      marketDataStatus, pionexAccountStatus, aiAnalysisStatus, aiAnalysisEnabled, setAiAnalysisEnabled, lastAIUpdate, lastAnalysisError,
       scanStats, performance, loadingDemo,
       signalHistory, signalPerfSummary, signalPatternStats,
       signalPerfByAI, signalPerfByConfidence,

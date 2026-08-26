@@ -55,16 +55,34 @@ async function getPionexUsdtMFuturesBalance(
   const wallet = (data?.data ?? {}) as Record<string, unknown>;
   const trader = (wallet.traderAccount ?? {}) as Record<string, unknown>;
 
+  // Pionex's current balancesFull schema returns Futures/Trader balances
+  // nested inside traderAccount.detail[].balances[]. The previous parser
+  // treated detail[] as direct coin rows, which made USDT-M available balance
+  // appear as 0 even when USDT was present in the Futures account.
   const rawDetail = trader.detail;
   const detail = Array.isArray(rawDetail)
     ? rawDetail as Record<string, unknown>[]
     : [];
 
-  const usdtRow = detail.find((row) => {
+  const nestedBalances = detail.flatMap((category) => {
+    const balances = category.balances;
+    return Array.isArray(balances)
+      ? balances as Record<string, unknown>[]
+      : [];
+  });
+
+  const directBalanceRows = detail.filter((row) =>
+    row.coin !== undefined || row.coinType !== undefined || row.asset !== undefined
+  );
+
+  const balanceRows = [...nestedBalances, ...directBalanceRows];
+
+  const usdtRow = balanceRows.find((row) => {
     const coin = String(
       row.coin ??
       row.coinType ??
       row.asset ??
+      row.currency ??
       ''
     ).toUpperCase();
 
@@ -82,8 +100,11 @@ async function getPionexUsdtMFuturesBalance(
   const available = readNumber(
     usdtRow?.free,
     usdtRow?.available,
+    usdtRow?.availableBalance,
+    usdtRow?.available_balance,
     usdtRow?.usdtAvailable,
     usdtRow?.marginAvailable,
+    usdtRow?.availableMargin,
   );
 
   const frozen = readNumber(
@@ -91,11 +112,14 @@ async function getPionexUsdtMFuturesBalance(
     usdtRow?.freeze,
     usdtRow?.locked,
     usdtRow?.marginFrozen,
+    usdtRow?.frozenBalance,
   );
 
   const explicitTotal = readNumber(
     usdtRow?.total,
     usdtRow?.balance,
+    usdtRow?.walletBalance,
+    usdtRow?.equity,
     usdtRow?.amount,
   );
 
@@ -110,6 +134,8 @@ async function getPionexUsdtMFuturesBalance(
     usdt_frozen: frozen,
     usdt_total: total,
     has_usdt_row: !!usdtRow,
+    detail_categories: detail.length,
+    nested_balance_rows: nestedBalances.length,
     detail_keys: usdtRow ? Object.keys(usdtRow) : [],
   }));
 

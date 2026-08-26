@@ -99,25 +99,13 @@ export async function refillDemoAccount(userId: string, amount: number) {
 export async function getOpenDemoTrades(userId: string): Promise<DemoTrade[]> {
   const { data, error } = await supabase
     .from('demo_trades')
-    .select('id,pair,status,opened_at')
+    .select('*')
     .eq('user_id', userId)
     .eq('status', 'open')
     .order('opened_at', { ascending: false })
     .limit(50);
 
-  console.log('[DEMO_OPEN_TRADES_LOAD]', {
-    count: Array.isArray(data) ? data.length : 0,
-    ids: Array.isArray(data) ? data.map(t => t.id) : [],
-    pairs: Array.isArray(data) ? data.map(t => t.pair) : [],
-    statuses: Array.isArray(data) ? data.map(t => t.status) : [],
-    error: error ? {
-      message: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-    } : null,
-  });
-
+  if (error) throw error;
   return Array.isArray(data) ? data : [];
 }
 
@@ -135,19 +123,7 @@ export async function openDemoTrade(trade: {
   ai_confidence?: number;
 }) {
   const { error } = await supabase.from('demo_trades').insert(trade);
-
-  if (error) {
-    console.error('[DEMO_TRADE_INSERT_ERROR]', {
-      message: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-    });
-
-    throw new Error(
-      `Supabase demo_trades INSERT failed | code=${error.code ?? 'NONE'} | message=${error.message}`
-    );
-  }
+  if (error) throw error;
 }
 
 export async function closeDemoTrade(tradeId: string) {

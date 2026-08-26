@@ -1852,7 +1852,8 @@ function RecommendedToTradePanel() {
 // component unmount/remount, and page refresh.
 //
 // Rules:
-//  • Max 1 open demo-trade at a time — enforced in TradingContext.
+//  • Demo mode allows multiple simultaneous open trades.
+//  • Live mode keeps its one-open-trade safety rule.
 //  • Signal must be ≤5 min old (FRESH) to be tradeable. AGING/STALE are blocked.
 //  • Uses BEST CURRENT SETUP (scored[0] RECOMMENDED) — same source as the UI panel.
 //  • Auto Trader evaluates ENTRY exactly once after each new Scheduler analysis.
