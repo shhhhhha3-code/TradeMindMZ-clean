@@ -56,6 +56,15 @@ export default function LoginPage() {
 
     setLoading(false);
 
+    const diagnosticMessage = [
+      `LOGIN ERROR: ${error?.message ?? 'NONE'}`,
+      `SESSION FROM LOGIN: ${loginData.session ? 'YES' : 'NO'}`,
+      `SESSION AFTER LOGIN: ${sessionData.session ? 'YES' : 'NO'}`,
+      `SESSION ERROR: ${sessionError?.message ?? 'NONE'}`,
+    ].join('\n');
+
+    window.alert(diagnosticMessage);
+
     if (error) {
       toast.error(
         error.message.includes('Invalid')
