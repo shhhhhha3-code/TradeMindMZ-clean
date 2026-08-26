@@ -24,12 +24,52 @@ export default function LoginPage() {
     e.preventDefault();
     if (!username || !password) { toast.error('Please fill in all fields'); return; }
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: emailFromUsername(username),
+
+    const loginEmail = emailFromUsername(username);
+
+    console.log('[AUTH_RUNTIME_LOGIN_START]', {
+      email: loginEmail,
+      userAgent: navigator.userAgent,
+      origin: window.location.origin,
+    });
+
+    const { data: loginData, error } = await supabase.auth.signInWithPassword({
+      email: loginEmail,
       password,
     });
+
+    console.log('[AUTH_RUNTIME_LOGIN_RESULT]', {
+      hasError: !!error,
+      errorMessage: error?.message ?? null,
+      hasSessionFromLogin: !!loginData.session,
+      userIdFromLogin: loginData.user?.id ?? null,
+    });
+
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    console.log('[AUTH_RUNTIME_SESSION_AFTER_LOGIN]', {
+      hasSession: !!sessionData.session,
+      sessionUserId: sessionData.session?.user?.id ?? null,
+      sessionError: sessionError?.message ?? null,
+    });
+
     setLoading(false);
-    if (error) { toast.error(error.message.includes('Invalid') ? 'Invalid username or password' : error.message); return; }
+
+    if (error) {
+      toast.error(
+        error.message.includes('Invalid')
+          ? 'Invalid username or password'
+          : error.message
+      );
+      return;
+    }
+
+    if (!loginData.session) {
+      toast.error('Login succeeded but no session was created');
+      return;
+    }
+
     toast.success('Welcome back!');
     navigate('/');
   };
