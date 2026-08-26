@@ -21,12 +21,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Sett opp Java 17 (kreves av Android Gradle Plugin 8.0)
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      # 2. Sett opp Java 21 (kreves av nåværende Capacitor Android-modul)
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       # 3. Sett opp Node.js
       - name: Set up Node.js
