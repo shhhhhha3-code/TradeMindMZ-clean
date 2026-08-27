@@ -46,20 +46,36 @@ export async function getDemoAccount(userId: string): Promise<DemoAccount | null
     throw error;
   }
 
-  if (!data) {
-    console.error('[DEMO_ACCOUNT_MISSING]', {
-      user_id: userId,
-      message: 'No demo_accounts row exists for this user',
+  if (data) {
+    console.log('[DEMO_ACCOUNT_LOADED]', {
+      balance: data.balance,
+      total_deposited: data.total_deposited,
     });
-    throw new Error('Demo account not found');
+    return data;
   }
 
-  console.log('[DEMO_ACCOUNT_LOADED]', {
-    balance: data.balance,
-    total_deposited: data.total_deposited,
+  // The account may not exist for older users.
+  // Initialize it server-side using auth.uid(), then read it back.
+  const { data: ensured, error: ensureError } = await supabase
+    .rpc('ensure_demo_account');
+
+  if (ensureError) {
+    console.error('[DEMO_ACCOUNT_INIT_FAILED]', ensureError);
+    throw new Error(
+      `Demo account initialization failed: ${ensureError.message ?? 'Unknown error'}`
+    );
+  }
+
+  if (!ensured) {
+    throw new Error('Demo account initialization returned no account');
+  }
+
+  console.log('[DEMO_ACCOUNT_INITIALIZED]', {
+    balance: ensured.balance,
+    total_deposited: ensured.total_deposited,
   });
 
-  return data;
+  return ensured as DemoAccount;
 }
 
 export async function updateDemoBalance(userId: string, newBalance: number) {
@@ -140,8 +156,16 @@ export async function openDemoTrade(trade: {
     p_signal_type: trade.signal_type ?? null,
     p_ai_confidence: trade.ai_confidence ?? null,
   }).maybeSingle();
-  if (error) throw error;
-  if (!data) throw new Error('Demo trade was not created');
+  if (error) {
+    const details = [error.message, error.details, error.hint]
+      .filter(Boolean)
+      .join(' | ');
+    throw new Error(`Demo trade failed: ${details || 'Unknown Supabase error'}`);
+  }
+
+  if (!data) {
+    throw new Error('Demo trade was not created: RPC returned no trade');
+  }
   return data as DemoTrade;
 }
 

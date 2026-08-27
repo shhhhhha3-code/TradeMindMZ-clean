@@ -39,135 +39,84 @@ const PIONEX_USDTM_ORDER_PATH = '/uapi/v1/trade/order';
 
 
 // ── USDT-M FUTURES BALANCE ────────────────────────────────────────────────
-// IMPORTANT: /api/v1/account/balances is Spot/Primary.
-// Live Futures trading must use traderAccount from balancesFull.
+// Use Pionex's dedicated Futures account balance endpoint.
+// Response:
+//   data.balances[] = { coin, free, frozen, debts }
+//   data.isolates[] = optional isolated-margin balances.
+//
+// This is the authoritative source for USDT-M available margin.
 async function getPionexUsdtMFuturesBalance(
   apiKey: string,
   apiSecret: string,
 ) {
   const data = await pionexAuthRequest(
     'GET',
-    '/api/v1/wallet/balancesFull',
+    '/uapi/v1/account/balances',
     apiKey,
     apiSecret,
   );
 
-  const wallet = (data?.data ?? {}) as Record<string, unknown>;
-  const trader = (wallet.traderAccount ?? {}) as Record<string, unknown>;
+  const payload = (data?.data ?? {}) as Record<string, unknown>;
 
-  // Pionex documents traderAccount.detail[] as FutureDetail objects whose
-  // balances[] contains the actual Futures balance rows. We also recursively
-  // scan the trader account so minor response-shape changes do not turn a real
-  // USDT-M balance into 0 in the UI.
-  const balanceRows: Record<string, unknown>[] = [];
-  const seen = new Set<object>();
-  const collect = (value: unknown, depth = 0): void => {
-    if (depth > 6 || value === null || typeof value !== 'object') return;
-    if (seen.has(value as object)) return;
-    seen.add(value as object);
-
-    if (Array.isArray(value)) {
-      for (const item of value) collect(item, depth + 1);
-      return;
-    }
-
-    const obj = value as Record<string, unknown>;
-    const coin = String(obj.coin ?? obj.coinType ?? obj.asset ?? obj.currency ?? '').toUpperCase();
-    const hasBalanceField = [
-      'free', 'available', 'availableBalance', 'available_balance',
-      'usdtAvailable', 'availableUsdt', 'availableUSDT', 'marginAvailable', 'availableMargin',
-      'frozen', 'freeze', 'locked', 'marginFrozen', 'frozenBalance',
-      'total', 'balance', 'walletBalance', 'equity', 'amount', 'marginBalance', 'accountBalance',
-    ].some((key) => obj[key] !== undefined);
-
-    if (coin && hasBalanceField) balanceRows.push(obj);
-
-    for (const value of Object.values(obj)) collect(value, depth + 1);
-  };
-
-  collect(trader);
-
-  const usdtRows = balanceRows.filter((row) => {
-    const coin = String(row.coin ?? row.coinType ?? row.asset ?? row.currency ?? '').toUpperCase();
-    return coin === 'USDT';
-  });
-
-  const readNumber = (...values: unknown[]): number => {
-    const numbers = values
-      .map((value) => Number(value))
-      .filter((n) => Number.isFinite(n));
-    // Pionex may expose the same balance under several keys. A zero-valued
-    // legacy key must not hide a populated key such as availableBalance or
-    // walletBalance, so prefer the first positive value and only fall back to
-    // zero when every candidate is zero/missing.
-    return numbers.find((n) => n > 0) ?? numbers[0] ?? 0;
-  };
-
-  // Prefer explicit available/free. For a Futures row with no explicit free,
-  // derive available from total - frozen so UI does not collapse to zero.
-  let available = 0;
-  let frozen = 0;
-  let total = 0;
-
-  for (const row of usdtRows) {
-    const rowFrozen = readNumber(
-      row.frozen, row.freeze, row.locked, row.marginFrozen, row.frozenBalance,
-    );
-    const rowTotal = readNumber(
-      row.total,
-      row.balance,
-      row.walletBalance,
-      row.equity,
-      row.amount,
-      row.marginBalance,
-      row.accountBalance,
-    );
-    const explicitAvailable = readNumber(
-      row.free,
-      row.available,
-      row.availableBalance,
-      row.available_balance,
-      row.usdtAvailable,
-      row.marginAvailable,
-      row.availableMargin,
-      row.availableUsdt,
-      row.availableUSDT,
-    );
-    const derivedAvailable = explicitAvailable !== 0
-      ? explicitAvailable
-      : Math.max(rowTotal - rowFrozen, 0);
-
-    available += derivedAvailable;
-    frozen += rowFrozen;
-    total += rowTotal > 0 ? rowTotal : derivedAvailable + rowFrozen;
-  }
-
-  const traderTotal = readNumber(trader.totalInUsdt);
-  if (total <= 0 && traderTotal > 0 && available <= 0) {
-    total = traderTotal;
-    available = Math.max(traderTotal - frozen, 0);
-  }
-
-  const categories = Array.isArray(trader.detail)
-    ? trader.detail as Record<string, unknown>[]
+  const balances = Array.isArray(payload.balances)
+    ? payload.balances as Record<string, unknown>[]
     : [];
 
+  const isolates = Array.isArray(payload.isolates)
+    ? payload.isolates as Record<string, unknown>[]
+    : [];
+
+  const read = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const usdt = balances.find(
+    b => String(b.coin ?? '').toUpperCase() === 'USDT'
+  );
+
+  let available = usdt ? read(usdt.free) : 0;
+  let frozen = usdt ? read(usdt.frozen) : 0;
+  let debts = usdt ? read(usdt.debts) : 0;
+
+  // For isolated-margin accounts, Pionex exposes additional USDT balances
+  // inside isolates[].balances[]. These are part of Futures collateral too.
+  // Add them without double-counting the main CROSS balance.
+  for (const isolate of isolates) {
+    const isoBalances = Array.isArray(isolate.balances)
+      ? isolate.balances as Record<string, unknown>[]
+      : [];
+
+    const isoUsdt = isoBalances.find(
+      b => String(b.coin ?? '').toUpperCase() === 'USDT'
+    );
+
+    if (isoUsdt) {
+      available += read(isoUsdt.free);
+      frozen += read(isoUsdt.frozen);
+      debts += read(isoUsdt.debts);
+    }
+  }
+
+  const total = Math.max(available + frozen - debts, 0);
+
   console.log('[PIONEX_FUTURES_BALANCE]', JSON.stringify({
-    endpoint: '/api/v1/wallet/balancesFull',
-    trader_total_in_usdt: trader.totalInUsdt ?? null,
-    usdt_available: available,
-    usdt_frozen: frozen,
-    usdt_total: total,
-    usdt_rows: usdtRows.length,
-    detail_categories: categories.length,
+    endpoint: '/uapi/v1/account/balances',
+    available,
+    frozen,
+    debts,
+    total,
+    cross_usdt_found: !!usdt,
+    isolates_count: isolates.length,
   }));
 
   return {
-    available,
+    available: Math.max(available - debts, 0),
     frozen,
     total,
-    detail: balanceRows,
-    trader,
+    debts,
+    detail: balances,
+    isolates,
   };
 }
 
@@ -1054,6 +1003,7 @@ Deno.serve(async (req) => {
         usdt_available: futures.available,
         usdt_locked: futures.frozen,
         usdt_total: futures.total,
+        usdt_debts: futures.debts,
         balances,
       });
     }
