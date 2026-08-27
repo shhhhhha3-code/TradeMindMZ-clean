@@ -142,7 +142,7 @@ export async function openDemoTrade(trade: {
   signal_type?: 'BUY' | 'SELL';
   ai_confidence?: number;
 }): Promise<DemoTrade> {
-  const { data, error } = await supabase.rpc('open_demo_trade_atomic', {
+  const rpcPayload = {
     p_user_id: trade.user_id,
     p_symbol: trade.symbol,
     p_pair: trade.pair,
@@ -155,7 +155,16 @@ export async function openDemoTrade(trade: {
     p_signal_id: trade.signal_id ?? null,
     p_signal_type: trade.signal_type ?? null,
     p_ai_confidence: trade.ai_confidence ?? null,
-  }).maybeSingle();
+  };
+
+  console.log('[DEMO_RPC_PAYLOAD]', {
+    ...rpcPayload,
+    p_user_id: '[REDACTED]',
+  });
+
+  const { data, error } = await supabase
+    .rpc('open_demo_trade_atomic', rpcPayload)
+    .maybeSingle();
   if (error) {
     const details = [error.message, error.details, error.hint]
       .filter(Boolean)
