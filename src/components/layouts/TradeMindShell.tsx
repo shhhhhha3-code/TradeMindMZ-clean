@@ -42,6 +42,14 @@ const SECONDARY_NAV = [
   { path: '/pipeline', label: 'Diagnostics', icon: Clock3 },
 ];
 
+const MOBILE_NAV = [
+  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/market', label: 'Trading', icon: Activity },
+  { path: '/exchange', label: 'Pionex', icon: Link2 },
+  { path: '/ai-signals', label: 'Signals', icon: BarChart3 },
+  { path: '/settings', label: 'Settings', icon: Settings },
+];
+
 function StatusDot({ active }: { active: boolean }) {
   return (
     <span
@@ -349,9 +357,26 @@ export default function TradeMindShell({ children }: ShellProps) {
             </div>
           </header>
 
-          <main className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6">
+          <main className="min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-24 md:px-6 md:py-6 md:pb-6">
             {children}
           </main>
+
+          <nav className="tm-mobile-nav md:hidden" aria-label="Mobile navigation">
+            {MOBILE_NAV.map(item => {
+              const Icon = item.icon;
+              const active = location.pathname === item.path;
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={cn('tm-mobile-nav-item', active && 'active')}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
 
           <footer className="border-t border-white/[.06] px-4 py-2">
             <p className="text-center text-[8px] leading-relaxed text-slate-600">

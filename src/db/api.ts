@@ -54,10 +54,9 @@ export async function getDemoAccount(userId: string): Promise<DemoAccount | null
     return data;
   }
 
-  // The account may not exist for older users.
-  // Initialize it server-side using auth.uid(), then read it back.
-  const { data: ensured, error: ensureError } = await supabase
-    .rpc('ensure_demo_account');
+  const { data: ensuredRaw, error: ensureError } = await supabase
+    .rpc('ensure_demo_account')
+    .maybeSingle();
 
   if (ensureError) {
     console.error('[DEMO_ACCOUNT_INIT_FAILED]', ensureError);
@@ -66,16 +65,18 @@ export async function getDemoAccount(userId: string): Promise<DemoAccount | null
     );
   }
 
-  if (!ensured) {
+  if (!ensuredRaw || typeof ensuredRaw !== 'object') {
     throw new Error('Demo account initialization returned no account');
   }
+
+  const ensured = ensuredRaw as unknown as DemoAccount;
 
   console.log('[DEMO_ACCOUNT_INITIALIZED]', {
     balance: ensured.balance,
     total_deposited: ensured.total_deposited,
   });
 
-  return ensured as DemoAccount;
+  return ensured;
 }
 
 export async function updateDemoBalance(userId: string, newBalance: number) {
@@ -142,39 +143,39 @@ export async function openDemoTrade(trade: {
   signal_type?: 'BUY' | 'SELL';
   ai_confidence?: number;
 }): Promise<DemoTrade> {
-  const rpcPayload = {
-    p_user_id: trade.user_id,
-    p_symbol: trade.symbol,
-    p_pair: trade.pair,
-    p_coin_name: trade.coin_name,
-    p_buy_price: trade.buy_price,
-    p_quantity: trade.quantity,
-    p_investment: trade.investment,
-    p_stop_loss: trade.stop_loss ?? null,
-    p_take_profit: trade.take_profit ?? null,
-    p_signal_id: trade.signal_id ?? null,
-    p_signal_type: trade.signal_type ?? null,
-    p_ai_confidence: trade.ai_confidence ?? null,
-  };
+  const { data, error } = await supabase.rpc('open_demo_trade_v2', {
+    p_trade: {
+      symbol: trade.symbol,
+      pair: trade.pair,
+      coin_name: trade.coin_name,
+      buy_price: trade.buy_price,
+      quantity: trade.quantity,
+      investment: trade.investment,
+      stop_loss: trade.stop_loss ?? null,
+      take_profit: trade.take_profit ?? null,
+      signal_id: trade.signal_id ?? null,
+      signal_type: trade.signal_type ?? null,
+      ai_confidence: trade.ai_confidence ?? null,
+    },
+  }).maybeSingle();
 
-  console.log('[DEMO_RPC_PAYLOAD]', {
-    ...rpcPayload,
-    p_user_id: '[REDACTED]',
-  });
-
-  const { data, error } = await supabase
-    .rpc('open_demo_trade_atomic', rpcPayload)
-    .maybeSingle();
   if (error) {
+    const code = String((error as { code?: string }).code ?? '');
     const details = [error.message, error.details, error.hint]
       .filter(Boolean)
       .join(' | ');
+
+    if (code === 'PGRST202' || /schema cache/i.test(error.message ?? '')) {
+      throw new Error(
+        'Demo trade RPC is not available in the Supabase schema cache yet. ' +
+        'Deploy migration 00044 and retry.'
+      );
+    }
+
     throw new Error(`Demo trade failed: ${details || 'Unknown Supabase error'}`);
   }
 
-  if (!data) {
-    throw new Error('Demo trade was not created: RPC returned no trade');
-  }
+  if (!data) throw new Error('Demo trade was not created: RPC returned no trade');
   return data as DemoTrade;
 }
 

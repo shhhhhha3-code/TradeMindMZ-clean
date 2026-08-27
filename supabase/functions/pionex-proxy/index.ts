@@ -39,12 +39,8 @@ const PIONEX_USDTM_ORDER_PATH = '/uapi/v1/trade/order';
 
 
 // ── USDT-M FUTURES BALANCE ────────────────────────────────────────────────
-// Use Pionex's dedicated Futures account balance endpoint.
-// Response:
-//   data.balances[] = { coin, free, frozen, debts }
-//   data.isolates[] = optional isolated-margin balances.
-//
-// This is the authoritative source for USDT-M available margin.
+// Pionex's dedicated Futures balance endpoint is the source of truth for
+// USDT-M collateral. Do not use the Spot/Primary account balance here.
 async function getPionexUsdtMFuturesBalance(
   apiKey: string,
   apiSecret: string,
@@ -57,61 +53,54 @@ async function getPionexUsdtMFuturesBalance(
   );
 
   const payload = (data?.data ?? {}) as Record<string, unknown>;
-
   const balances = Array.isArray(payload.balances)
     ? payload.balances as Record<string, unknown>[]
     : [];
-
   const isolates = Array.isArray(payload.isolates)
     ? payload.isolates as Record<string, unknown>[]
     : [];
 
-  const read = (v: unknown): number => {
-    const n = Number(v);
+  const num = (value: unknown): number => {
+    const n = Number(value);
     return Number.isFinite(n) ? n : 0;
   };
 
-  const usdt = balances.find(
-    b => String(b.coin ?? '').toUpperCase() === 'USDT'
+  const crossUsdt = balances.find(
+    row => String(row.coin ?? '').toUpperCase() === 'USDT'
   );
 
-  let available = usdt ? read(usdt.free) : 0;
-  let frozen = usdt ? read(usdt.frozen) : 0;
-  let debts = usdt ? read(usdt.debts) : 0;
+  let available = crossUsdt ? num(crossUsdt.free) : 0;
+  let frozen = crossUsdt ? num(crossUsdt.frozen) : 0;
+  let debts = crossUsdt ? num(crossUsdt.debts) : 0;
 
-  // For isolated-margin accounts, Pionex exposes additional USDT balances
-  // inside isolates[].balances[]. These are part of Futures collateral too.
-  // Add them without double-counting the main CROSS balance.
   for (const isolate of isolates) {
-    const isoBalances = Array.isArray(isolate.balances)
+    const isolatedBalances = Array.isArray(isolate.balances)
       ? isolate.balances as Record<string, unknown>[]
       : [];
-
-    const isoUsdt = isoBalances.find(
-      b => String(b.coin ?? '').toUpperCase() === 'USDT'
+    const isolatedUsdt = isolatedBalances.find(
+      row => String(row.coin ?? '').toUpperCase() === 'USDT'
     );
-
-    if (isoUsdt) {
-      available += read(isoUsdt.free);
-      frozen += read(isoUsdt.frozen);
-      debts += read(isoUsdt.debts);
-    }
+    if (!isolatedUsdt) continue;
+    available += num(isolatedUsdt.free);
+    frozen += num(isolatedUsdt.frozen);
+    debts += num(isolatedUsdt.debts);
   }
 
+  const spendable = Math.max(available - debts, 0);
   const total = Math.max(available + frozen - debts, 0);
 
   console.log('[PIONEX_FUTURES_BALANCE]', JSON.stringify({
     endpoint: '/uapi/v1/account/balances',
-    available,
+    cross_usdt_found: !!crossUsdt,
+    isolates_count: isolates.length,
+    available: spendable,
     frozen,
     debts,
     total,
-    cross_usdt_found: !!usdt,
-    isolates_count: isolates.length,
   }));
 
   return {
-    available: Math.max(available - debts, 0),
+    available: spendable,
     frozen,
     total,
     debts,
@@ -1004,6 +993,7 @@ Deno.serve(async (req) => {
         usdt_locked: futures.frozen,
         usdt_total: futures.total,
         usdt_debts: futures.debts,
+        balance_source: '/uapi/v1/account/balances',
         balances,
       });
     }
