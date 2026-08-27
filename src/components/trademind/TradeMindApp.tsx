@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import "./TradeMindUI.css";
+import "./TradeMindUI.refresh.css";
 import { useTrading } from '@/contexts/TradingContext';
 
 type Page = "Dashboard"|"Trading"|"Open Positions"|"Signals"|"AI Analysis"|"Auto Trader"|"History"|"Wallet"|"Settings";
