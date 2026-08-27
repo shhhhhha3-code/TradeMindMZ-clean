@@ -765,6 +765,33 @@ function DashboardDemoOpenTradesPanel({ openTrades }: { openTrades: DemoTrade[] 
   );
 }
 
+
+function MiniSparkline({ values, tone = 'live' }: { values: number[]; tone?: 'live' | 'demo' | 'negative' }) {
+  const clean = values.filter(v => Number.isFinite(v));
+  if (clean.length < 2) return <div className="tm-sparkline-empty" />;
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  const span = max - min || 1;
+  const points = clean.map((v, i) => {
+    const x = (i / (clean.length - 1)) * 100;
+    const y = 24 - ((v - min) / span) * 18 - 3;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg className={`tm-sparkline ${tone}`} viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+      <polyline fill="none" points={points} />
+    </svg>
+  );
+}
+
+function getTodayPnl(tradeHistory: DemoTradeHistory[]): number {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return tradeHistory
+    .filter(t => t.closed_at && new Date(t.closed_at).getTime() >= start.getTime())
+    .reduce((sum, t) => sum + (t.profit_loss ?? 0), 0);
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const {
@@ -775,9 +802,11 @@ export default function DashboardPage() {
     autoTraderEnabled, autoTraderTradeId, autoTraderTotalTrades, autoTraderLastAction,
     autoTraderBestSetup, autoTraderBestOverallScore,
     signalPerfSummary, signalPerfByConfidence,
-    isPionexLive, liveOrders, openLiveOrders
+    isPionexLive, liveOrders, openLiveOrders, getBalance
   } = useTrading();
   const [pionexConnection, setPionexConnection] = useState<PionexConnection | null>(null);
+  const [liveBalance, setLiveBalance] = useState<{ available: number; total: number } | null>(null);
+  const [liveBalanceLoading, setLiveBalanceLoading] = useState(false);
   const [plFilter, setPlFilter] = useState<TimeFilter>('30D');
   const [manualBuySignal, setManualBuySignal] = useState<AISignal | null>(null);
 
@@ -790,6 +819,30 @@ export default function DashboardPage() {
 
   const pionexConnected = !!pionexConnection?.is_connected;
   const pionexLastSync = pionexConnection?.last_sync ?? null;
+
+  const refreshLiveBalance = useCallback(async () => {
+    if (!pionexConnected) {
+      setLiveBalance(null);
+      return;
+    }
+    setLiveBalanceLoading(true);
+    try {
+      const bal = await getBalance();
+      setLiveBalance({ available: bal.usdt_available, total: bal.usdt_total });
+    } catch (error) {
+      console.error('[DASHBOARD_LIVE_BALANCE]', error);
+      setLiveBalance(null);
+    } finally {
+      setLiveBalanceLoading(false);
+    }
+  }, [getBalance, pionexConnected]);
+
+  useEffect(() => {
+    refreshLiveBalance();
+    if (!pionexConnected) return;
+    const id = window.setInterval(refreshLiveBalance, 15000);
+    return () => window.clearInterval(id);
+  }, [refreshLiveBalance, pionexConnected]);
 
   const signals = signalsCache?.signals ?? [];
 
@@ -820,6 +873,7 @@ export default function DashboardPage() {
 
   const plData = useMemo(() => buildPLSeries(tradeHistory, openTrades, demoAccount?.total_deposited ?? 500, plFilter), [tradeHistory, openTrades, demoAccount?.total_deposited, plFilter]);
   const periodStats = useMemo(() => buildPeriodStats(tradeHistory, liveOrders, plFilter), [tradeHistory, liveOrders, plFilter]);
+  const todayPnl = useMemo(() => getTodayPnl(tradeHistory), [tradeHistory]);
 
   const recentEvents = useMemo(() => buildRecentEvents(
     lastAIUpdate, signals, autoTraderBestSetup, autoTraderBestOverallScore,
@@ -1013,583 +1067,222 @@ export default function DashboardPage() {
     }
   };
 
+  const demoTotalPnl = performance.realized_pnl + performance.unrealized_pnl;
+  const livePeriodPnl = periodStats.livePnl;
+  const livePeriodWinRate = periodStats.liveWinRate;
+  const connectionTone = pionexConnected ? 'ONLINE' : 'OFFLINE';
+
   return (
     <>
-    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
-      {/* Page header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl md:text-2xl font-bold font-['Space_Grotesk'] text-foreground">Dashboard</h1>
-          <p className="text-xs md:text-sm text-muted-foreground mt-0.5">AI Trading Control Center</p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" size="sm" className="text-xs gap-1.5 h-8" onClick={copyDiagnostics}>
-            <ClipboardCopy className="w-3.5 h-3.5" /> Copy Diagnostics
-          </Button>
-          <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border"
-            style={{ borderColor: pionexConnected ? 'hsl(var(--success)/0.3)' : 'hsl(var(--border))', background: pionexConnected ? 'hsl(var(--success)/0.1)' : 'hsl(var(--muted))' }}>
-            <StatusDot color={pionexConnected ? 'success' : 'muted'} />
-            <span className={cn('font-medium hidden sm:inline', pionexConnected ? 'text-success' : 'text-muted-foreground')}>
-              {pionexConnected ? 'Connected' : 'Not Connected'}
-            </span>
+      <div className="tm-dashboard p-3 pb-24 md:p-6 md:pb-8">
+        <div className="tm-page-head mb-4 md:mb-5">
+          <div>
+            <div className="tm-kicker">TRADEMINDMZ / TERMINAL</div>
+            <div className="mt-1 flex flex-wrap items-end gap-3">
+              <h1 className="tm-title">Dashboard</h1>
+              <span className="tm-live-chip">
+                <StatusDot color={pionexConnected ? 'success' : 'muted'} />
+                {connectionTone}
+              </span>
+            </div>
+            <p className="tm-subtitle">Live portfolio control, demo execution and market intelligence in one screen.</p>
           </div>
-        </div>
-      </div>
-
-      {/* AI updating notice — never hides existing data */}
-      {aiAnalysisStatus === 'updating' && (
-        <div className="flex items-center gap-2 text-xs text-warning p-2.5 rounded-lg border border-warning/20 bg-warning/5">
-          <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
-          Updating AI analysis in background — previous analysis still displayed.
-        </div>
-      )}
-
-      {/* ── V2 Pipeline Overview Bar ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-        {[
-          {
-            label: 'Pairs Scanned',
-            value: pairsScanned || '—',
-            icon: Globe,
-            color: pairsScanned > 0 ? 'text-foreground' : 'text-muted-foreground',
-            border: 'border-border',
-            link: '/pipeline',
-          },
-          {
-            label: 'Local Setups',
-            value: localSetupsCount || '—',
-            icon: Cpu,
-            color: localSetupsCount > 0 ? 'text-primary' : 'text-muted-foreground',
-            border: localSetupsCount > 0 ? 'border-primary/30' : 'border-border',
-            link: '/market',
-          },
-          {
-            label: 'AI Review',
-            value: analyzedCount || '—',
-            icon: Brain,
-            color: analyzedCount > 0 ? 'text-primary' : 'text-muted-foreground',
-            border: analyzedCount > 0 ? 'border-primary/25' : 'border-border',
-            link: '/pipeline',
-          },
-          {
-            // "AI Reviewed" = AI actually responded and created signals this run
-            // When rate-limited, this is 0 and we must not show green
-            label: aiRateLimited ? 'AI Reviewed ⚠' : 'AI Reviewed',
-            value: aiVerifiedCount || '—',
-            icon: CheckCircle2,
-            color: aiVerifiedCount > 0 && !aiRateLimited ? 'text-success' : 'text-muted-foreground',
-            border: aiVerifiedCount > 0 && !aiRateLimited ? 'border-success/30' : 'border-border',
-            link: '/ai-signals',
-            tooltip: aiRateLimited
-              ? 'AI was rate-limited this run. 0 signals were AI-reviewed.'
-              : 'Signals reviewed by AI this run.',
-          },
-          {
-            // "AI Recommended" only when AI ran AND server approved
-            // When rate-limited, server-qualified setups must NOT show as "Recommended"
-            label: aiRateLimited ? 'Server Qualified' : 'AI Recommended',
-            value: recommendedCount || '—',
-            icon: Zap,
-            color: recommendedCount > 0 && !aiRateLimited ? 'text-success' : aiRateLimited ? 'text-warning' : 'text-muted-foreground',
-            border: recommendedCount > 0 && !aiRateLimited ? 'border-success/40' : aiRateLimited ? 'border-warning/30' : 'border-border',
-            bg: recommendedCount > 0 && !aiRateLimited ? 'bg-success/5' : aiRateLimited ? 'bg-warning/5' : '',
-            link: '/ai-signals',
-            tooltip: aiRateLimited
-              ? 'AI rate-limited — these are server-scored setups only, NOT AI recommendations.'
-              : 'Setups AI-reviewed AND server-qualified. Eligible for Auto Trader.',
-          },
-        ].map(({ label, value, icon: Icon, color, border, bg, link, tooltip }) => (
-          <Link key={label} to={link}>
-            <div
-              title={tooltip}
-              className={cn(
-                'p-3 rounded-xl border cursor-pointer transition-all hover:border-primary/40',
-                border, bg ?? '',
-              )}
-              style={{ background: bg ? undefined : 'hsl(var(--card))' }}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide leading-tight">{label}</span>
-                <Icon className={cn('w-3.5 h-3.5 shrink-0', color)} />
-              </div>
-              <div className={cn('text-2xl font-bold font-mono leading-none', color)}>{value}</div>
-              {aiRateLimited && label === 'AI Review' && (
-                <div className="text-[9px] text-warning mt-1">Rate limited</div>
-              )}
-            </div>
-          </Link>
-        ))}
-      </div>
-
-      {/* Open trades overview — demo and real Pionex positions side-by-side */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <DashboardDemoOpenTradesPanel openTrades={openTrades} />
-        <Panel className="flex flex-col">
-          <PanelHeader
-            title="Pionex Open Trades"
-            icon={Radio}
-            action={
-              <div className="flex items-center gap-2">
-                <span className={cn(
-                  'w-1.5 h-1.5 rounded-full',
-                  pionexConnected ? 'bg-success shadow-[0_0_7px_hsl(var(--success))]' : 'bg-muted-foreground'
-                )} />
-                <span className={cn('text-xs font-semibold', pionexConnected ? 'text-success' : 'text-muted-foreground')}>
-                  {pionexConnected ? `${openLiveOrders.length} tracked` : 'Not connected'}
-                </span>
-              </div>
-            }
-          />
-          <DashboardLivePositionsPanel pionexConnected={pionexConnected} compact />
-        </Panel>
-      </div>
-
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard title="Demo Balance" icon={Wallet}
-          value={`${demoAccount?.balance.toFixed(2) ?? '500.00'} USDT`}
-          subtitle={<DemoBadge />}
-          iconColor="hsl(var(--warning))" loading={loadingDemo} />
-        <StatCard title="Open Trades" icon={Layers}
-          value={openTrades.length}
-          subtitle={openTrades.length > 0
-            ? <PnLValue value={performance.unrealized_pnl} suffix=" USDT" />
-            : <span className="text-muted-foreground">No active trades</span>}
-          iconColor="hsl(var(--primary))" loading={loadingDemo} />
-        <StatCard title="AI Confidence" icon={Brain}
-          value={`${avgConfidence}/100`}
-          subtitle={<span className="text-muted-foreground">{signals.length} signal{signals.length !== 1 ? 's' : ''}</span>}
-          iconColor="hsl(var(--primary))" loading={loadingDemo} />
-        <StatCard title="Today's P/L" icon={TrendingUp}
-          value={<PnLValue value={performance.realized_pnl} suffix=" USDT" />}
-          subtitle={<PnLPct value={performance.total_return_pct} />}
-          iconColor={performance.realized_pnl >= 0 ? 'hsl(var(--success))' : 'hsl(var(--destructive))'}
-          loading={loadingDemo} />
-      </div>
-
-      {/* Performance Overview with P/L chart */}
-      <Panel>
-        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-          <PanelHeader title="Performance Overview" icon={BarChart2} className="mb-0" />
-          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-            {(['7D', '30D', '90D', 'ALL'] as TimeFilter[]).map(f => (
-              <button
-                key={f}
-                onClick={() => setPlFilter(f)}
-                className={cn(
-                  'px-2.5 py-1 text-[10px] font-semibold rounded-md transition-colors',
-                  plFilter === f ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Demo P/L · {plFilter}</div>
-            <div className={cn('text-lg font-bold font-["Space_Grotesk"]', periodStats.demoPnl >= 0 ? 'text-positive' : 'text-negative')}>
-              {periodStats.demoPnl >= 0 ? '+' : ''}{periodStats.demoPnl.toFixed(2)} USDT
-            </div>
-            <div className="text-[10px] text-muted-foreground">{periodStats.demoTrades} closed · {periodStats.demoWinRate.toFixed(0)}% win rate</div>
-          </div>
-          <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Pionex P/L · {plFilter}</div>
-            <div className={cn('text-lg font-bold font-["Space_Grotesk"]', periodStats.livePnl >= 0 ? 'text-positive' : 'text-negative')}>
-              {periodStats.livePnl >= 0 ? '+' : ''}{periodStats.livePnl.toFixed(2)} USDT
-            </div>
-            <div className="text-[10px] text-muted-foreground">{periodStats.liveTrades} closed · {periodStats.liveWinRate.toFixed(0)}% win rate</div>
-          </div>
-          <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Demo Unrealized</div>
-            <div className={cn('text-lg font-bold font-["Space_Grotesk"]', performance.unrealized_pnl >= 0 ? 'text-positive' : 'text-negative')}>
-              {performance.unrealized_pnl >= 0 ? '+' : ''}{performance.unrealized_pnl.toFixed(2)} USDT
-            </div>
-            <div className="text-[10px] text-muted-foreground">{openTrades.length} open trades</div>
-          </div>
-          <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-            <div className="text-xs text-muted-foreground mb-1">Demo Account</div>
-            <div className="text-lg font-bold font-['Space_Grotesk'] text-foreground">{performance.account_value.toFixed(2)} USDT</div>
-            <div className="text-[10px] text-muted-foreground">All-time · {performance.total_return_pct >= 0 ? '+' : ''}{performance.total_return_pct.toFixed(2)}%</div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border p-3" style={{ background: 'hsl(var(--muted))' }}>
-          <div className="flex items-center justify-between gap-2 mb-3">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-primary" />
-              <h3 className="text-sm font-bold font-['Space_Grotesk'] text-foreground">DEMO P/L PERFORMANCE</h3>
-            </div>
-            <div className="flex items-center gap-3 text-xs">
-              <div className="text-right">
-                <div className="text-muted-foreground">Cumulative P/L</div>
-                <div className={cn('font-bold', performance.realized_pnl + performance.unrealized_pnl >= 0 ? 'text-positive' : 'text-negative')}>
-                  {performance.realized_pnl + performance.unrealized_pnl >= 0 ? '+' : ''}{(performance.realized_pnl + performance.unrealized_pnl).toFixed(2)} USDT
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-muted-foreground">Total Return</div>
-                <div className={cn('font-bold', performance.total_return_pct >= 0 ? 'text-positive' : 'text-negative')}>
-                  {performance.total_return_pct >= 0 ? '+' : ''}{performance.total_return_pct.toFixed(2)}%
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {plData.length > 1 ? (
-            <PLChart data={plData} />
-          ) : (
-            <div className="h-64 flex flex-col items-center justify-center text-center text-muted-foreground border border-dashed border-border rounded-lg">
-              <BarChart2 className="w-10 h-10 mb-2 opacity-50" />
-              <p className="text-sm font-medium">Insufficient historical P/L data</p>
-              <p className="text-xs max-w-xs">Closed trades will build this chart over time. No data for {plFilter}.</p>
-            </div>
-          )}
-        </div>
-      </Panel>
-
-      {/* AI Performance + BEST CURRENT SETUP */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Panel>
-          <PanelHeader title="AI Performance" icon={Brain} action={
-            <Link to="/ai-performance" className="shrink-0">
-              <Button variant="ghost" size="sm" className="text-xs gap-1 h-7 px-2">
-                Details <ArrowRight className="w-3 h-3" />
-              </Button>
-            </Link>
-          } />
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-                <div className="text-xs text-muted-foreground mb-1">Avg Confidence</div>
-                <div className="flex items-center gap-2">
-                  <div className="text-2xl font-bold font-['Space_Grotesk'] text-foreground">{avgConfidence}</div>
-                  <ConfidenceRing value={avgConfidence} size={48} />
-                </div>
-              </div>
-              <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-                <div className="text-xs text-muted-foreground mb-1">Market Sentiment</div>
-                <div className="text-2xl font-bold font-['Space_Grotesk']" style={{ color: sentiment.score >= 60 ? 'hsl(var(--success))' : sentiment.score >= 40 ? 'hsl(var(--warning))' : 'hsl(var(--destructive))' }}>
-                  {sentiment.label}
-                </div>
-                {/* Show score + note when AI returned cached/default 50 */}
-                <div className="text-xs text-muted-foreground">
-                  Score {sentiment.score}/100
-                  {sentiment.score === 50 && diagnostics && (diagnostics.ai_cache_hits ?? 0) > 0 && (diagnostics.ai_cache_misses ?? 0) === 0 && (
-                    <span className="ml-1 text-[10px] opacity-70">(cache)</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {signalPerfSummary && signalPerfSummary.total_signals > 0 ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-                  <div className="text-xs text-muted-foreground mb-2">Win Rate</div>
-                  <MiniDonut
-                    data={[
-                      { label: 'Wins', value: signalPerfSummary.wins },
-                      { label: 'Losses', value: signalPerfSummary.losses },
-                      { label: 'Expired', value: signalPerfSummary.expired },
-                    ]}
-                    colors={['hsl(var(--success))', 'hsl(var(--destructive))', 'hsl(var(--warning))']}
-                    innerText={`${signalPerfSummary.win_rate_pct.toFixed(0)}%`}
-                  />
-                  <div className="flex items-center justify-center gap-3 text-[10px] text-muted-foreground mt-1">
-                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-success" />Wins {signalPerfSummary.wins}</span>
-                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-destructive" />Losses {signalPerfSummary.losses}</span>
-                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-warning" />Exp {signalPerfSummary.expired}</span>
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-                  <div className="text-xs text-muted-foreground mb-2">P/L Performance</div>
-                  <MiniBarChart
-                    data={[
-                      { label: 'Avg', value: signalPerfSummary.avg_return_pct ?? 0 },
-                      { label: 'Win', value: signalPerfSummary.avg_win_pct ?? 0 },
-                      { label: 'Loss', value: signalPerfSummary.avg_loss_pct ?? 0 },
-                    ].map(d => ({ ...d, value: d.value / 100 }))}
-                    positiveColor="hsl(var(--success))"
-                    negativeColor="hsl(var(--destructive))"
-                  />
-                  <div className="grid grid-cols-2 gap-2 text-[10px] mt-2">
-                    <div className="text-center">
-                      <div className="text-muted-foreground">Total P/L</div>
-                      <div className={cn('font-semibold', (signalPerfSummary.total_pl_usdt ?? 0) >= 0 ? 'text-positive' : 'text-negative')}>
-                        {(signalPerfSummary.total_pl_usdt ?? 0) >= 0 ? '+' : ''}{(signalPerfSummary.total_pl_usdt ?? 0).toFixed(2)} USDT
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-muted-foreground">Evaluated</div>
-                      <div className="font-semibold text-foreground">{signalPerfSummary.evaluated_signals}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-3 rounded-lg border border-border border-dashed text-center" style={{ background: 'hsl(var(--muted))' }}>
-                <Brain className="w-6 h-6 text-muted-foreground mx-auto mb-2 opacity-50" />
-                <p className="text-xs text-muted-foreground">No AI performance history yet</p>
-              </div>
-            )}
-
-            <div className="flex flex-wrap gap-2 text-xs">
-              <Badge variant="outline" className="border-border gap-1">
-                <Activity className="w-3 h-3 text-primary" /> {pairsScanned} pairs scanned
-              </Badge>
-              <Badge variant="outline" className="border-border gap-1">
-                <Brain className="w-3 h-3 text-primary" /> {analyzedCount} analyzed
-              </Badge>
-              <Badge variant="outline" className="border-border gap-1">
-                <Zap className="w-3 h-3 text-warning" /> {opportunities} opportunities
-              </Badge>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className={aiAnalysisStatus === 'updating' ? 'status-dot-warning' : 'status-dot-live'} />
-              AI Analysis: {getAILabel()}
-              {lastAnalysisError && <span className="text-destructive">• Error: {lastAnalysisError}</span>}
-            </div>
-          </div>
-        </Panel>
-
-        <Panel>
-          <PanelHeader title="BEST CURRENT SETUP" icon={Zap} action={
-            <Link to="/ai-signals" className="shrink-0">
-              <Button variant="ghost" size="sm" className="text-xs gap-1 h-7 px-2">
-                View in AI Signals <ArrowRight className="w-3 h-3" />
-              </Button>
-            </Link>
-          } />
-          <div className="space-y-3">
-            {autoTraderBestSetup ? (
-              <div className="p-4 rounded-lg border border-primary/30 bg-primary/5">
-                <div className="flex items-center justify-between gap-2 mb-4">
-                  <div className="flex items-center gap-3">
-                    <CoinLogo symbol={autoTraderBestSetup.signal.symbol} size={36} />
-                    <div>
-                      <div className="font-bold text-base text-foreground leading-tight">{autoTraderBestSetup.signal.pair}</div>
-                      <div className="text-xs text-muted-foreground">{autoTraderBestSetup.signal.coin_name}</div>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5">
-                    <SignalBadge type={autoTraderBestSetup.signal.signal_type} size="sm" />
-                    <Badge variant="outline" className="text-xs border-success/40 bg-success/10 text-success">{autoTraderBestSetup.freshnessLabel}</Badge>
-                    <div className="flex items-center gap-1 text-xs text-success">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> TRADEABLE
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 mb-4">
-                  <div className="text-center p-2 rounded-md bg-background/60 border border-border/50">
-                    <div className="text-[10px] text-muted-foreground uppercase">Current Score</div>
-                    <div className="text-lg font-bold text-foreground">{autoTraderBestSetup.currentScore}</div>
-                  </div>
-                  <div className="text-center p-2 rounded-md bg-background/60 border border-border/50">
-                    <div className="text-[10px] text-muted-foreground uppercase">Confidence</div>
-                    <div className="text-lg font-bold text-foreground">{autoTraderBestSetup.signal.confidence}</div>
-                  </div>
-                  <div className="text-center p-2 rounded-md bg-background/60 border border-border/50">
-                    <div className="text-[10px] text-muted-foreground uppercase">Signal Strength</div>
-                    <div className="text-lg font-bold text-primary">{autoTraderBestSetup.signal.signal_strength}</div>
-                  </div>
-                </div>
-
-                <div className="space-y-2 text-xs mb-4">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Freshness</span>
-                    <span className="font-medium text-success">{autoTraderBestSetup.freshnessLabel}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Risk / Reward</span>
-                    <span className="font-medium text-foreground">{autoTraderBestSetup.signal.risk_reward ?? 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Entry</span>
-                    <span className="font-medium text-foreground">{formatPrice(autoTraderBestSetup.signal.current_price)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Take Profit</span>
-                    <span className="font-medium text-success">{formatPrice(autoTraderBestSetup.signal.take_profit_1)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Stop Loss</span>
-                    <span className="font-medium text-destructive">{formatPrice(autoTraderBestSetup.signal.stop_loss)}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-2 border-t border-border/60">
-                  <div className="text-[10px] text-muted-foreground">
-                    Generated {fmtTimeAgo(autoTraderBestSetup.signal.generated_at)}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      disabled={!pionexConnected || !isPionexLive}
-                      onClick={() => { setManualBuySignal(autoTraderBestSetup.signal); }}
-                    >
-                      BUY LIVE
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : autoTraderBestOverallScore ? (
-              <div className="p-4 rounded-lg border border-border" style={{ background: 'hsl(var(--muted))' }}>
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-3">
-                    <CoinLogo symbol={autoTraderBestOverallScore.signal.symbol} size={36} />
-                    <div>
-                      <div className="font-bold text-base text-foreground leading-tight">{autoTraderBestOverallScore.signal.pair}</div>
-                      <div className="text-xs text-muted-foreground">{autoTraderBestOverallScore.signal.coin_name}</div>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5">
-                    <SignalBadge type={autoTraderBestOverallScore.signal.signal_type} size="sm" />
-                    <Badge variant="outline" className="text-xs border-warning/40 bg-warning/10 text-warning">{autoTraderBestOverallScore.freshnessLabel}</Badge>
-                    <div className="flex items-center gap-1 text-xs text-warning">
-                      <AlertCircle className="w-3.5 h-3.5" /> NOT TRADEABLE
-                    </div>
-                  </div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Best overall score is {autoTraderBestOverallScore.freshnessLabel.toLowerCase()} — waiting for fresh RECOMMENDED signal.
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <Zap className="w-10 h-10 text-muted-foreground mb-2 opacity-50" />
-                <p className="text-sm font-medium text-muted-foreground">No qualifying setup</p>
-                <p className="text-xs text-muted-foreground mt-1">Waiting for next AI analysis</p>
-              </div>
-            )}
-            {autoTraderBestOverallScore && autoTraderBestOverallScore !== autoTraderBestSetup && (
-              <div className="text-xs text-muted-foreground border-t border-border pt-2">
-                Best Overall Score: <span className="font-semibold text-foreground">{autoTraderBestOverallScore.signal.pair}</span> — {autoTraderBestOverallScore.freshnessLabel}
-              </div>
-            )}
-          </div>
-        </Panel>
-      </div>
-
-      {/* System Status */}
-      <div className="grid grid-cols-1 gap-4">
-        <Panel>
-          <PanelHeader title="System Status" icon={Server} />
-          <div className="space-y-2">
-            {systemStatuses.map((s, i) => (
-              <div key={i} className="p-2.5 rounded-lg border border-border/50" style={{ background: 'hsl(var(--muted))' }}>
-                <StatusRow item={s} />
-                {s.detail && <div className="text-[10px] text-muted-foreground pl-6 truncate mt-0.5">{s.detail}</div>}
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-3 border-t border-border grid grid-cols-2 gap-3 text-xs">
-            <div className="p-2 rounded-md bg-muted">
-              <div className="text-muted-foreground text-[10px] uppercase">Last Analysis</div>
-              <div className="font-medium text-foreground truncate">{getAILabel()}</div>
-            </div>
-            <div className="p-2 rounded-md bg-muted">
-              <div className="text-muted-foreground text-[10px] uppercase">Last Scheduler Run</div>
-              <div className="font-medium text-foreground truncate">{schedulerStatus?.last_run_at ? fmtTimeAgo(schedulerStatus.last_run_at) : 'N/A'}</div>
-            </div>
-            <div className="p-2 rounded-md bg-muted">
-              <div className="text-muted-foreground text-[10px] uppercase">Next Scheduler Run</div>
-              <div className="font-medium text-foreground truncate">{schedulerStatus?.next_run_at ? fmtTimeAgo(schedulerStatus.next_run_at) : 'N/A'}</div>
-            </div>
-            <div className="p-2 rounded-md bg-muted">
-              <div className="text-muted-foreground text-[10px] uppercase">Last Successful Run</div>
-              <div className="font-medium text-foreground truncate">{schedulerStatus?.last_success_at ? fmtTimeAgo(schedulerStatus.last_success_at) : 'N/A'}</div>
-            </div>
-          </div>
-        </Panel>
-      </div>
-
-      {/* Pipeline Diagnostics */}
-      <Panel>
-        <PanelHeader title="Pipeline Diagnostics" icon={Terminal} />
-        <div className="overflow-x-auto pb-3 -mx-4 px-4">
-          <div className="flex items-center gap-1.5 min-w-max">
-            {pipelineSteps.map((step, idx) => (
-              <div key={step.label} className="flex items-center gap-1.5">
-                <div className={cn(
-                  'flex flex-col items-center gap-1.5 min-w-[92px] max-w-[120px] px-2 py-3 rounded-lg border',
-                  step.color === 'success' ? 'border-success/20 bg-success/5'
-                  : step.color === 'warning' ? 'border-warning/20 bg-warning/5'
-                  : step.color === 'destructive' ? 'border-destructive/20 bg-destructive/5'
-                  : 'border-border bg-muted/30'
-                )}>
-                  <div className="flex items-center gap-1.5">
-                    <StatusDot color={step.color} size="md" />
-                  </div>
-                  <div className="text-[10px] font-semibold text-center text-foreground leading-tight uppercase">{step.label}</div>
-                  <div className={cn('text-[10px] font-bold text-center', step.color === 'success' ? 'text-success' : step.color === 'warning' ? 'text-warning' : step.color === 'destructive' ? 'text-destructive' : 'text-muted-foreground')}>
-                    {step.status}
-                  </div>
-                  {step.detail && <div className="text-[9px] text-muted-foreground text-center truncate w-full px-1">{step.detail}</div>}
-                </div>
-                {idx < pipelineSteps.length - 1 && (
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <div className="w-3 h-px bg-border" />
-                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground rotate-[-90deg] shrink-0 -ml-2" />
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </Panel>
-
-      {/* Recent Activity / Signal Summary */}
-      <Panel>
-        <PanelHeader title="Recent Activity" icon={Activity} action={
-          <Link to="/ai-signals" className="shrink-0">
-            <Button variant="ghost" size="sm" className="text-xs gap-1 h-7 px-2">
-              View Signals <ArrowRight className="w-3 h-3" />
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="tm-ghost-btn hidden sm:flex" onClick={copyDiagnostics}>
+              <ClipboardCopy className="mr-1.5 h-3.5 w-3.5" /> Diagnostics
             </Button>
-          </Link>
-        } />
-        <div className="space-y-2">
-          {loadingDemo ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map(i => <div key={i} className="h-12 rounded-lg bg-muted animate-pulse" />)}
-            </div>
-          ) : recentEvents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
-              <Activity className="w-10 h-10 mb-2 opacity-50" />
-              <p className="text-sm font-medium">No recent activity</p>
-              <p className="text-xs">Events will appear as the system runs.</p>
-            </div>
-          ) : (
-            <div className="max-h-80 overflow-y-auto pr-1">
-              {recentEvents.map((evt, i) => (
-                <div key={i} className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0">
-                  <div className={cn('w-2 h-2 rounded-full mt-1.5 shrink-0', eventColor(evt.type))} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium text-foreground truncate">{evt.message}</div>
-                    <div className="text-[10px] text-muted-foreground">{fmtTimeAgo(evt.timestamp)}</div>
-                  </div>
-                  {evt.detail && <div className="text-[10px] text-muted-foreground shrink-0 max-w-[120px] truncate">{evt.detail}</div>}
-                </div>
-              ))}
-            </div>
-          )}
+            <Button variant="outline" size="icon" className="tm-icon-btn sm:hidden" onClick={copyDiagnostics} aria-label="Copy diagnostics">
+              <ClipboardCopy className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-      </Panel>
-    </div>
 
-    {manualBuySignal && (
-      <ManualBuyModal
-        open={!!manualBuySignal}
-        onClose={() => setManualBuySignal(null)}
-        signal={manualBuySignal}
-      />
-    )}
+        {aiAnalysisStatus === 'updating' && (
+          <div className="tm-alert mb-4">
+            <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />
+            <span>AI analysis is updating in the background. Existing signals remain available.</span>
+          </div>
+        )}
 
-    <TradingDiagnosticsPanel />
-  </>
+        <div className="tm-kpi-grid mb-4 md:mb-5">
+          <div className="tm-kpi tm-kpi-live">
+            <div className="tm-kpi-top"><span>LIVE BALANCE</span><Wallet className="h-4 w-4" /></div>
+            <div className="tm-kpi-value">{liveBalanceLoading ? '…' : liveBalance ? `${liveBalance.available.toFixed(2)}` : '—'} <small>USDT</small></div>
+            <div className="tm-kpi-meta">PIONEX USDT-M · AVAILABLE</div><MiniSparkline values={plData.map(p => p.accountValue)} tone="live" />
+          </div>
+          <div className="tm-kpi">
+            <div className="tm-kpi-top"><span>TOTAL EQUITY</span><BarChart2 className="h-4 w-4" /></div>
+            <div className="tm-kpi-value">{liveBalanceLoading ? '…' : liveBalance ? `${liveBalance.total.toFixed(2)}` : '—'} <small>USDT</small></div>
+            <div className="tm-kpi-meta">FUTURES ACCOUNT · 15S SYNC</div><MiniSparkline values={plData.map(p => p.accountValue)} tone="demo" />
+          </div>
+          <div className="tm-kpi">
+            <div className="tm-kpi-top"><span>DEMO TODAY P/L</span><TrendingUp className="h-4 w-4" /></div>
+            <div className={cn('tm-kpi-value', todayPnl >= 0 ? 'text-positive' : 'text-negative')}>
+              {todayPnl >= 0 ? '+' : ''}{todayPnl.toFixed(2)} <small>USDT</small>
+            </div>
+            <div className="tm-kpi-meta">CLOSED TODAY · {tradeHistory.filter(t => t.closed_at && new Date(t.closed_at).getTime() >= new Date(new Date().setHours(0,0,0,0)).getTime()).length} TRADES</div><MiniSparkline values={tradeHistory.slice().reverse().map(t => t.profit_loss)} tone={todayPnl >= 0 ? 'live' : 'negative'} />
+          </div>
+          <div className="tm-kpi">
+            <div className="tm-kpi-top"><span>{plFilter} LIVE P/L</span><Activity className="h-4 w-4" /></div>
+            <div className={cn('tm-kpi-value', livePeriodPnl >= 0 ? 'text-positive' : 'text-negative')}>
+              {livePeriodPnl >= 0 ? '+' : ''}{livePeriodPnl.toFixed(2)} <small>USDT</small>
+            </div>
+            <div className="tm-kpi-meta">CLOSED LIVE TRADES · {livePeriodWinRate.toFixed(0)}% WIN</div>
+          </div>
+        </div>
+
+        <div className="tm-top-grid mb-4 md:mb-5">
+          <Panel className="tm-panel tm-chart-panel">
+            <div className="tm-panel-head">
+              <div>
+                <div className="tm-kicker">EQUITY MONITOR</div>
+                <h2 className="tm-section-title">Portfolio Performance</h2>
+              </div>
+              <div className="tm-filter-group">
+                {(['7D', '30D', '90D', 'ALL'] as TimeFilter[]).map(f => (
+                  <button key={f} onClick={() => setPlFilter(f)} className={cn('tm-filter-btn', plFilter === f && 'active')}>{f}</button>
+                ))}
+              </div>
+            </div>
+            <div className="tm-chart-legend">
+              <span><i className="tm-legend-dot live" /> Account equity</span>
+              <span><i className="tm-legend-dot signal" /> Demo activity</span>
+              <strong>{demoTotalPnl >= 0 ? '+' : ''}{demoTotalPnl.toFixed(2)} USDT</strong>
+            </div>
+            <div className="tm-main-chart">
+              {plData.length > 1 ? <PLChart data={plData} /> : (
+                <div className="tm-chart-empty">
+                  <BarChart2 className="h-8 w-8" />
+                  <span>No historical P/L data for {plFilter}</span>
+                </div>
+              )}
+            </div>
+          </Panel>
+
+          <div className="space-y-4">
+            <Panel className="tm-panel tm-side-panel">
+              <div className="tm-panel-head">
+                <div>
+                  <div className="tm-kicker">LIVE MODE</div>
+                  <h2 className="tm-section-title">Open Positions</h2>
+                </div>
+                <span className="tm-status-pill live">{pionexConnected ? `${openLiveOrders.length} ACTIVE` : 'OFFLINE'}</span>
+              </div>
+              <DashboardLivePositionsPanel pionexConnected={pionexConnected} compact />
+            </Panel>
+
+            <DashboardDemoOpenTradesPanel openTrades={openTrades} />
+          </div>
+        </div>
+
+        <div className="tm-summary-grid mb-4 md:mb-5">
+          <Panel className="tm-panel">
+            <div className="tm-panel-head">
+              <div><div className="tm-kicker">PERFORMANCE</div><h2 className="tm-section-title">Performance Summary</h2></div>
+              <span className="tm-mini-label">{plFilter}</span>
+            </div>
+            <div className="tm-stat-grid">
+              <div className="tm-stat"><span>DEMO P/L</span><strong className={periodStats.demoPnl >= 0 ? 'text-positive' : 'text-negative'}>{periodStats.demoPnl >= 0 ? '+' : ''}{periodStats.demoPnl.toFixed(2)}</strong><small>USDT</small></div>
+              <div className="tm-stat"><span>LIVE P/L</span><strong className={livePeriodPnl >= 0 ? 'text-positive' : 'text-negative'}>{livePeriodPnl >= 0 ? '+' : ''}{livePeriodPnl.toFixed(2)}</strong><small>USDT</small></div>
+              <div className="tm-stat"><span>WIN RATE</span><strong>{performance.win_rate.toFixed(1)}%</strong><small>ALL DEMO</small></div>
+              <div className="tm-stat"><span>OPEN</span><strong>{openTrades.length + openLiveOrders.length}</strong><small>POSITIONS</small></div>
+              <div className="tm-stat"><span>BEST TRADE</span><strong className="text-positive">{performance.best_trade != null ? `+${performance.best_trade.toFixed(2)}` : '—'}</strong><small>USDT</small></div>
+              <div className="tm-stat"><span>WORST TRADE</span><strong className="text-negative">{performance.worst_trade != null ? performance.worst_trade.toFixed(2) : '—'}</strong><small>USDT</small></div>
+            </div>
+          </Panel>
+
+          <Panel className="tm-panel tm-ai-panel">
+            <div className="tm-panel-head">
+              <div><div className="tm-kicker">INTELLIGENCE</div><h2 className="tm-section-title">AI Insight</h2></div>
+              <Link to="/ai-signals" className="tm-link-btn">OPEN AI <ArrowRight className="h-3.5 w-3.5" /></Link>
+            </div>
+            <div className="tm-ai-core">
+              <div className="tm-ai-orb"><Brain className="h-7 w-7" /></div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[.16em] text-slate-500">AI STATUS</div>
+                <div className={cn('mt-1 text-lg font-bold', aiAnalysisStatus === 'error' ? 'text-negative' : 'text-positive')}>
+                  {aiAnalysisStatus === 'updating'
+  ? 'UPDATING'
+  : aiAnalysisStatus === 'error'
+    ? 'ERROR'
+    : aiAnalysisEnabledLabel(aiSource, aiAnalysisStatus)}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">Source: {aiSource}</div>
+              </div>
+            </div>
+            <div className="tm-ai-grid">
+              <div><span>MARKET OUTLOOK</span><strong>{sentiment.label.toUpperCase()}</strong></div>
+              <div><span>CONFIDENCE</span><strong>{avgConfidence}/100</strong></div>
+              <div><span>SIGNALS</span><strong>{signals.length}</strong></div>
+              <div><span>RECOMMENDED</span><strong>{recommendedCount}</strong></div>
+            </div>
+          </Panel>
+        </div>
+
+        <div className="tm-three-grid mb-4 md:mb-5">
+          <Panel className="tm-panel">
+            <div className="tm-panel-head"><div><div className="tm-kicker">LIVE</div><h2 className="tm-section-title">Recent Positions</h2></div><Link to="/exchange" className="tm-link-btn">VIEW ALL <ArrowRight className="h-3.5 w-3.5" /></Link></div>
+            <div className="tm-table">
+              {openLiveOrders.length === 0 ? <div className="tm-empty">No tracked live orders.</div> : openLiveOrders.slice(0, 4).map((o, i) => {
+                const pnl = o.realized_pnl ?? 0;
+                return <div className="tm-row" key={`${o.id ?? o.pair ?? 'live'}-${i}`}><div className="tm-row-main"><span>{o.pair ?? o.symbol ?? '—'}</span><small>{o.side ?? o.status ?? 'OPEN'}</small></div><strong className={pnl >= 0 ? 'text-positive' : 'text-negative'}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT</strong></div>;
+              })}
+            </div>
+          </Panel>
+
+          <Panel className="tm-panel">
+            <div className="tm-panel-head"><div><div className="tm-kicker">DEMO</div><h2 className="tm-section-title">Recent Trades</h2></div><Link to="/ai-signals" className="tm-link-btn">VIEW ALL <ArrowRight className="h-3.5 w-3.5" /></Link></div>
+            <div className="tm-table">
+              {tradeHistory.length === 0 ? <div className="tm-empty">No closed demo trades yet.</div> : tradeHistory.slice(0, 4).map(t => <div className="tm-row" key={t.id}><div className="tm-row-main"><span>{t.pair}</span><small>{t.exit_reason.toUpperCase()}</small></div><strong className={t.profit_loss >= 0 ? 'text-positive' : 'text-negative'}>{t.profit_loss >= 0 ? '+' : ''}{t.profit_loss.toFixed(2)} USDT</strong></div>)}
+            </div>
+          </Panel>
+
+          <Panel className="tm-panel">
+            <div className="tm-panel-head"><div><div className="tm-kicker">MARKETS</div><h2 className="tm-section-title">Live Market Overview</h2></div><Link to="/market" className="tm-link-btn">OPEN <ArrowRight className="h-3.5 w-3.5" /></Link></div>
+            <div className="tm-market-list">
+              {signals.slice(0, 5).map((s) => <div className="tm-market" key={s.id}><div><span>{s.pair}</span><small>{s.signal_type} · {s.confidence}%</small></div><span className={s.signal_type === 'BUY' ? 'text-positive' : s.signal_type === 'SELL' ? 'text-negative' : 'text-warning'}>{s.signal_type}</span></div>)}
+              {signals.length === 0 && <div className="tm-empty">No live signals currently available.</div>}
+            </div>
+          </Panel>
+        </div>
+
+        <Panel className="tm-panel tm-status-panel mb-4">
+          <div className="tm-panel-head">
+            <div><div className="tm-kicker">SYSTEM</div><h2 className="tm-section-title">Terminal Status</h2></div>
+            <div className="tm-status-meta">Last sync {pionexLastSync ? fmtTimeAgo(pionexLastSync) : '—'}</div>
+          </div>
+          <div className="tm-status-grid">
+            <div><span>PIONEX API</span><strong className={pionexConnected ? 'text-positive' : 'text-negative'}>{pionexConnected ? '200 OK' : 'OFFLINE'}</strong></div>
+            <div><span>MARKET DATA</span><strong className={marketDataStatus === 'live' ? 'text-positive' : 'text-warning'}>{String(marketDataStatus).toUpperCase()}</strong></div>
+            <div><span>AI</span><strong>{aiAnalysisStatus === 'updating' ? 'ANALYZING' : aiAnalysisStatus === 'error' ? 'ERROR' : 'READY'}</strong></div>
+            <div><span>AI SOURCE</span><strong>{aiAnalysisEnabledLabel(aiSource, aiAnalysisStatus)}</strong></div>
+            <div><span>SCHEDULER</span><strong>{schedulerStatus?.is_active ? 'ACTIVE' : 'IDLE'}</strong></div>
+            <div><span>AUTO TRADER</span><strong>{autoTraderEnabled ? 'ENABLED' : 'DISABLED'}</strong></div>
+          </div>
+        </Panel>
+
+        <div className="tm-pipeline-strip">
+          {pipelineSteps.slice(0, 8).map(step => (
+            <div key={step.label} className="tm-pipeline-item">
+              <StatusDot color={step.color} />
+              <span>{step.label}</span>
+              <strong>{step.status}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {manualBuySignal && (
+        <ManualBuyModal open={!!manualBuySignal} onClose={() => setManualBuySignal(null)} signal={manualBuySignal} />
+      )}
+      <TradingDiagnosticsPanel />
+    </>
   );
+}
+
+function aiAnalysisEnabledLabel(source: string, status: string | null | undefined): string {
+  if (status === 'error') return 'ERROR';
+  if (String(source).toLowerCase().includes('server')) return 'SERVER';
+  if (String(source).toLowerCase().includes('openai') || String(source).toLowerCase().includes('gemini')) return 'MODEL';
+  return source || 'N/A';
 }

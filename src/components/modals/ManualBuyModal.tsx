@@ -68,7 +68,8 @@ export default function ManualBuyModal({ open, onClose, signal }: Props) {
         setMarketData({ basePrecision: 8, amountPrecision: 2, minTradeAmount: 0, minOrderValue: 0 });
       }
     } catch (e) {
-      setInfoError('Kunne ikke hente saldo / market-info');
+      setUsdtAvailable(null);
+      setInfoError(e instanceof Error ? e.message : 'Kunne ikke hente saldo / market-info');
       console.error('[MANUAL_BUY_MODAL] fetchInfo error:', e);
     } finally {
       setLoadingInfo(false);
@@ -263,6 +264,9 @@ export default function ManualBuyModal({ open, onClose, signal }: Props) {
                 <div className="h-5 w-24 bg-muted-foreground/20 rounded animate-pulse" />
               ) : (
                 <div className="text-xs text-muted-foreground">—</div>
+              )}
+              {infoError && (
+                <div className="mt-1 text-[10px] text-destructive">{infoError}</div>
               )}
             </div>
           </div>
